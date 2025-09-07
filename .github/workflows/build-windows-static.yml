@@ -1,3 +1,4 @@
+
 name: Build Minimal FFmpeg Windows (static, MSYS2)
 
 on:
@@ -23,6 +24,10 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-freetype
             mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-bzip2
+            mingw-w64-x86_64-brotli
+            mingw-w64-x86_64-harfbuzz
 
       - name: Build x264 (static) and FFmpeg (static)
         shell: msys2 {0}
@@ -45,7 +50,7 @@ jobs:
           ./configure --enable-static --disable-cli --disable-opencl --prefix="$PWD"
           make -j"$JOBS"
           make install
-          export PKG_CONFIG_PATH="$PWD"
+          export PKG_CONFIG_PATH="$PWD:${PKG_CONFIG_PATH:-}"
           cd ..
 
           echo "==> Fetching FFmpeg"
@@ -60,8 +65,16 @@ jobs:
             git apply "$ROOT/ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch" || { echo "Patch failed (win), continuing"; }
           fi
 
+          echo "==> Diagnose pkg-config paths"
+          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+          echo "pkg-config freetype2 --modversion:"
+          PKG_CONFIG=/mingw64/bin/pkg-config /mingw64/bin/pkg-config freetype2 --modversion || true
+          echo "/mingw64/lib/pkgconfig listing:"
+          ls -la /mingw64/lib/pkgconfig | sed -n '1,120p'
+
           echo "==> Configure FFmpeg (static)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
+          PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
             --prefix="$DIST" \
             --target-os=mingw32 \
@@ -114,3 +127,9 @@ jobs:
         with:
           name: ffmpeg-windows-static-minimal
           path: dist/bin/**
+""").strip()
+
+with open("/mnt/data/.github/workflows/build-windows-static.yml", "w") as f:
+    f.write(win_workflow_fixed + "\n")
+
+print("Updated: /mnt/data/.github/workflows/build-windows-static.yml")
