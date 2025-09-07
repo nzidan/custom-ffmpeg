@@ -1,4 +1,3 @@
-
 name: Build Minimal FFmpeg Windows (static, MSYS2)
 
 on:
@@ -127,9 +126,3 @@ jobs:
         with:
           name: ffmpeg-windows-static-minimal
           path: dist/bin/**
-""").strip()
-
-with open("/mnt/data/.github/workflows/build-windows-static.yml", "w") as f:
-    f.write(win_workflow_fixed + "\n")
-
-print("Updated: /mnt/data/.github/workflows/build-windows-static.yml")
