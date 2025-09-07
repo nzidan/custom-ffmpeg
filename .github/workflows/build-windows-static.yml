@@ -64,12 +64,7 @@ jobs:
             git apply "$ROOT/ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch" || { echo "Patch failed (win), continuing"; }
           fi
 
-          echo "==> Diagnose pkg-config paths"
-          echo "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-          echo "pkg-config freetype2 --modversion:"
-          PKG_CONFIG=/mingw64/bin/pkg-config /mingw64/bin/pkg-config freetype2 --modversion || true
-          echo "/mingw64/lib/pkgconfig listing:"
-          ls -la /mingw64/lib/pkgconfig | sed -n '1,120p'
+          
 
           echo "==> Configure FFmpeg (static)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
@@ -101,10 +96,8 @@ jobs:
             --enable-muxer=matroska \
             --enable-encoder=libx264 \
             --enable-encoder=aac \
-            --enable-libfreetype \
             --enable-filter=scale \
             --enable-filter=overlay \
-            --enable-filter=drawtext \
             --enable-filter=crop \
             --enable-filter=buffer \
             --enable-filter=buffersink \
