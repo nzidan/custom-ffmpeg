@@ -1,0 +1,19 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] gdigrab: remove CAPTUREBLT usage for compatibility
+---
+ libavdevice/gdigrab.c | 4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/libavdevice/gdigrab.c b/libavdevice/gdigrab.c
+index 1111111..2222222 100644
+--- a/libavdevice/gdigrab.c
++++ b/libavdevice/gdigrab.c
+@@ -123,10 +123,6 @@ static int gdigrab_read_frame(AVFormatContext *s, AVPacket *pkt) {
+-    /* CAPTUREBLT may cause issues on some Windows builds/drivers */
+-    flags |= CAPTUREBLT;
+-    BitBlt(hdcMem, 0, 0, width, height, hdcSrc, 0, 0, SRCCOPY | CAPTUREBLT);
++    BitBlt(hdcMem, 0, 0, width, height, hdcSrc, 0, 0, SRCCOPY);
+     return 0;
+ }
+-- 
+2.42.0

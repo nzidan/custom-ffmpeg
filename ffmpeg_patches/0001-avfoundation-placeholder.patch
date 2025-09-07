@@ -1,0 +1,18 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+Subject: [PATCH] avfoundation: example placeholder patch
+---
+ libavdevice/avfoundation.m | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/libavdevice/avfoundation.m b/libavdevice/avfoundation.m
+index 3333333..4444444 100644
+--- a/libavdevice/avfoundation.m
++++ b/libavdevice/avfoundation.m
+@@ -10,7 +10,9 @@
+-// original line
++// Patched for your environment (placeholder)
++// Add any custom tweaks here
++// (No-op patch for demonstration)
+
+-- 
+2.42.0
