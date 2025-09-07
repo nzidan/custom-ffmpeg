@@ -16,7 +16,7 @@ jobs:
       - name: Install deps (Homebrew)
         run: |
           brew update
-          brew install pkg-config nasm cmake
+          brew install pkg-config nasm
 
       - name: Build x264 (static) and FFmpeg (static)
         shell: bash
