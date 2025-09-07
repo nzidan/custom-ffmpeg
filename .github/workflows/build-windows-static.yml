@@ -58,12 +58,6 @@ jobs:
             git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
           fi
 
-          echo "==> Applying Windows patches"
-          cd FFmpeg
-          if [ -f "$ROOT/ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch" ]; then
-            git apply "$ROOT/ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch" || { echo "Patch failed (win), continuing"; }
-          fi
-
           echo "==> Configure FFmpeg (static)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
@@ -76,8 +70,7 @@ jobs:
             --extra-ldflags="-static -static-libgcc -static-libstdc++" \
             --enable-static \
             --disable-shared \
-            --enable-gpl \
-            --enable-libx264 \
+            --disable-doc \
             --disable-ffplay \
             --disable-ffprobe \
             --disable-sdl2 \
@@ -85,17 +78,20 @@ jobs:
             --disable-iconv \
             --disable-zlib \
             --disable-lzma \
-            --disable-doc \
-            --enable-indev=gdigrab \
+            --disable-autodetect \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-encoder=libx264 \
+            --enable-encoder=aac \
             --enable-indev=dshow \
+            --enable-indev=ddagrab \
+            --enable-indev=gdigrab \
             --enable-protocol=file \
             --enable-protocol=pipe \
             --enable-muxer=mp4 \
             --enable-muxer=matroska \
-            --enable-encoder=libx264 \
-            --enable-encoder=aac \
-            --enable-filter=scale \
-           
+            --enable-muxer=mov \
+            --enable-filter=scale
 
           echo "==> Build FFmpeg"
           make -j"$JOBS"
