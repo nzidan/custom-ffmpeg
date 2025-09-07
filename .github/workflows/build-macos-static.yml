@@ -1,0 +1,109 @@
+name: Build Minimal FFmpeg macOS (static)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install deps (Homebrew)
+        run: |
+          brew update
+          brew install pkg-config nasm cmake freetype libpng
+
+      - name: Build x264 (static) and FFmpeg (static)
+        shell: bash
+        run: |
+          set -euo pipefail
+          JOBS=$(sysctl -n hw.ncpu || echo 4)
+          ROOT="$PWD"
+          BUILD="$ROOT/_build"
+          DIST="$ROOT/dist"
+          mkdir -p "$BUILD" "$DIST"
+          cd "$BUILD"
+
+          echo "==> Fetching x264"
+          if [ ! -d x264 ]; then
+            git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          fi
+
+          echo "==> Building x264 (static, no cli/opencl)"
+          cd x264
+          ./configure --enable-static --disable-cli --disable-opencl --prefix="$PWD"
+          make -j"$JOBS"
+          make install
+          export PKG_CONFIG_PATH="$PWD"
+          cd ..
+
+          echo "==> Fetching FFmpeg"
+          : "${FFMPEG_TAG:=n7.0}"
+          if [ ! -d FFmpeg ]; then
+            git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
+          fi
+
+          echo "==> Applying Darwin headers/patches (if provided)"
+          cd FFmpeg
+          if [ -d "$ROOT/ffmpeg_patches/darwin/include" ]; then
+            cp -R "$ROOT/ffmpeg_patches/darwin/include/." ./libavdevice/ || true
+          fi
+          if compgen -G "$ROOT/ffmpeg_patches/darwin/*.patch" > /dev/null; then
+            git apply $ROOT/ffmpeg_patches/darwin/*.patch || { echo "Darwin patch apply failed, continuing"; }
+          fi
+
+          echo "==> Configure FFmpeg (static)"
+          PKG_CONFIG=$(command -v pkg-config) \
+          ./configure \
+            --prefix="$DIST" \
+            --pkg-config-flags="--static" \
+            --enable-static \
+            --disable-shared \
+            --enable-gpl \
+            --enable-libx264 \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-sdl2 \
+            --disable-bzlib \
+            --disable-iconv \
+            --disable-zlib \
+            --disable-lzma \
+            --enable-indev=avfoundation \
+            --enable-protocol=file \
+            --enable-protocol=pipe \
+            --enable-muxer=mp4 \
+            --enable-muxer=mov \
+            --enable-muxer=matroska \
+            --enable-encoder=libx264 \
+            --enable-encoder=aac \
+            --enable-libfreetype \
+            --enable-filter=scale \
+            --enable-filter=overlay \
+            --enable-filter=drawtext \
+            --enable-filter=crop \
+            --enable-filter=buffer \
+            --enable-filter=buffersink \
+            --enable-filter=abuffer \
+            --enable-filter=format \
+            --enable-filter=aformat \
+            --enable-filter=null \
+            --enable-filter=anull \
+            --extra-ldflags="-framework CoreAudio"
+
+          echo "==> Build FFmpeg"
+          make -j"$JOBS"
+          make install
+
+          echo "==> Contents of dist/bin"
+          ls -la "$DIST/bin"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-macos-static-minimal
+          path: dist/bin/**

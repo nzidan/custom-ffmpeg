@@ -1,0 +1,116 @@
+name: Build Minimal FFmpeg Windows (static, MSYS2)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (MINGW64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >
+            base-devel git make patch pkg-config nasm
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-libpng
+
+      - name: Build x264 (static) and FFmpeg (static)
+        shell: msys2 {0}
+        run: |
+          set -eo pipefail
+          JOBS=$(nproc || echo 4)
+          ROOT="$PWD"
+          BUILD="$ROOT/_build"
+          DIST="$ROOT/dist"
+          mkdir -p "$BUILD" "$DIST"
+          cd "$BUILD"
+
+          echo "==> Fetching x264"
+          if [ ! -d x264 ]; then
+            git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          fi
+
+          echo "==> Building x264 (static, no cli/opencl)"
+          cd x264
+          ./configure --enable-static --disable-cli --disable-opencl --prefix="$PWD"
+          make -j"$JOBS"
+          make install
+          export PKG_CONFIG_PATH="$PWD"
+          cd ..
+
+          echo "==> Fetching FFmpeg"
+          : "${FFMPEG_TAG:=n7.0}"
+          if [ ! -d FFmpeg ]; then
+            git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
+          fi
+
+          echo "==> Applying Windows patches"
+          cd FFmpeg
+          if [ -f "$ROOT/ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch" ]; then
+            git apply "$ROOT/ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch" || { echo "Patch failed (win), continuing"; }
+          fi
+
+          echo "==> Configure FFmpeg (static)"
+          PKG_CONFIG=/mingw64/bin/pkg-config \
+          ./configure \
+            --prefix="$DIST" \
+            --target-os=mingw32 \
+            --arch=x86_64 \
+            --pkg-config-flags="--static" \
+            --extra-cflags="-I/mingw64/include" \
+            --extra-ldflags="-static -static-libgcc -static-libstdc++" \
+            --enable-static \
+            --disable-shared \
+            --enable-gpl \
+            --enable-libx264 \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-sdl2 \
+            --disable-bzlib \
+            --disable-iconv \
+            --disable-zlib \
+            --disable-lzma \
+            --enable-indev=gdigrab \
+            --enable-indev=dshow \
+            --enable-protocol=file \
+            --enable-protocol=pipe \
+            --enable-muxer=mp4 \
+            --enable-muxer=mov \
+            --enable-muxer=matroska \
+            --enable-encoder=libx264 \
+            --enable-encoder=aac \
+            --enable-libfreetype \
+            --enable-filter=scale \
+            --enable-filter=overlay \
+            --enable-filter=drawtext \
+            --enable-filter=crop \
+            --enable-filter=buffer \
+            --enable-filter=buffersink \
+            --enable-filter=abuffer \
+            --enable-filter=format \
+            --enable-filter=aformat \
+            --enable-filter=null \
+            --enable-filter=anull
+
+          echo "==> Build FFmpeg"
+          make -j"$JOBS"
+          make install
+
+          echo "==> Contents of dist/bin"
+          ls -la "$DIST/bin"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows-static-minimal
+          path: dist/bin/**
