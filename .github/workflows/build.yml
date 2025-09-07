@@ -1,14 +1,10 @@
-# Create a Windows GitHub Actions workflow and README to build a minimal FFmpeg (Windows, MSYS2) matching the requested components.
-from textwrap import dedent
-import os, json, pathlib
-
-workflow = dedent(r"""
-name: Build Minimal FFmpeg (Windows, MSYS2)
+name: Build Minimal FFmpeg Windows (MSYS2)
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -22,12 +18,8 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: >-
-            base-devel
-            git
-            make
-            pkg-config
-            nasm
+          install: >
+            base-devel git make pkg-config nasm
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-freetype
             mingw-w64-x86_64-libpng
@@ -46,7 +38,7 @@ jobs:
 
           echo "==> Fetching FFmpeg source"
           cd "$BUILD"
-          FFMPEG_TAG="${FFMPEG_TAG:-n7.0}"
+          : "${FFMPEG_TAG:=n7.0}"
           if [ ! -d FFmpeg ]; then
             git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
           fi
@@ -94,15 +86,12 @@ jobs:
 
           echo "==> Collecting runtime DLLs"
           cd "$DIST/bin"
-          # Copy dependent DLLs into dist/bin to make the artifact portable
           ntldd -R ffmpeg.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
             cp -n "$dll" . || true
           done
           ntldd -R ffprobe.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
             cp -n "$dll" . || true
           done
-
-          echo "==> Listing contents"
           ls -la
 
       - name: Upload artifact (zip)
@@ -110,32 +99,3 @@ jobs:
         with:
           name: ffmpeg-windows-minimal
           path: dist/bin/**
-""").strip()
-
-readme = dedent(r"""
-# Minimal FFmpeg (Windows) — Build via GitHub Actions/MSYS2
-
-Builds a **Windows** FFmpeg with ONLY these components:
-
-- **Screen capture (indev):** `gdigrab` (Windows desktop capture)
-- **Audio capture (indev):** `dshow` (DirectShow; pick your mic/virtual device)
-- **Encoders:** `libx264`, `aac` (native)
-- **Muxers:** `mp4`, `mov`, `matroska`
-- **Filters:** `scale`, `overlay`, `drawtext` (via `libfreetype`), `crop`
-- **Protocols:** `file`, `pipe`
-
-> Note: `avfoundation` is macOS-only. On Windows, use `gdigrab` for screen and `dshow` for audio.
-
-## How to use
-
-1. Create a repo and add this workflow at `.github/workflows/build-windows.yml`.
-2. Run the workflow (Actions → **Build Minimal FFmpeg (Windows, MSYS2)** → **Run workflow**).
-3. Download the artifact **ffmpeg-windows-minimal** → contains `ffmpeg.exe`, `ffprobe.exe`, and required DLLs.
-
-## Verify features
-
-```powershell
-.\ffmpeg.exe -hide_banner -filters | Select-String "scale|overlay|drawtext|crop"
-.\ffmpeg.exe -hide_banner -encoders | Select-String "aac|libx264"
-.\ffmpeg.exe -hide_banner -protocols | Select-String "file|pipe"
-.\ffmpeg.exe -hide_banner -muxers | Select-String "mp4|mov|matroska"
