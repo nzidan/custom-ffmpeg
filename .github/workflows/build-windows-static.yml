@@ -1,4 +1,4 @@
-name: Build Minimal FFmpeg Windows (scale only, ddagrab enabled)
+name: Build Minimal FFmpeg Windows (ddagrab + scale)
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
             base-devel git make pkg-config nasm
             mingw-w64-x86_64-toolchain
 
-      - name: Build x264 (static) and FFmpeg
+      - name: Build x264 and FFmpeg
         shell: msys2 {0}
         run: |
           set -eo pipefail
@@ -33,12 +33,10 @@ jobs:
           mkdir -p "$BUILD" "$DIST"
           cd "$BUILD"
 
-          echo "==> Fetching x264"
+          echo "==> Build x264"
           if [ ! -d x264 ]; then
             git clone --depth 1 https://code.videolan.org/videolan/x264.git
           fi
-
-          echo "==> Building x264 (static, no cli/opencl)"
           cd x264
           ./configure --enable-static --disable-cli --disable-opencl --prefix="$PWD"
           make -j"$JOBS"
@@ -46,14 +44,17 @@ jobs:
           export PKG_CONFIG_PATH="$PWD:${PKG_CONFIG_PATH:-}"
           cd ..
 
-          echo "==> Fetching FFmpeg"
+          echo "==> Fetch FFmpeg"
           : "${FFMPEG_TAG:=n7.0}"
           if [ ! -d FFmpeg ]; then
             git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
           fi
           cd FFmpeg
 
-          echo "==> Configure FFmpeg (scale-only, enable ddagrab/gdigrab/dshow)"
+          echo "==> Verify ddagrab is available"
+          ./configure --list-indevs | grep -i ddagrab || echo "WARNING: no ddagrab in this tag ($FFMPEG_TAG)"
+
+          echo "==> Configure FFmpeg"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
@@ -76,8 +77,8 @@ jobs:
             --enable-encoder=libx264 \
             --enable-encoder=aac \
             --enable-indev=dshow \
-            --enable-indev=ddagrab \
             --enable-indev=gdigrab \
+            --enable-indev=ddagrab \
             --enable-protocol=file \
             --enable-protocol=pipe \
             --enable-muxer=mp4 \
@@ -86,23 +87,16 @@ jobs:
             --enable-filter=scale \
             --extra-libs="-ld3d11 -ldxgi -lole32 -luuid -ldwmapi"
 
-          echo "==> Inspect configure results for ddagrab/gdigrab"
-          grep -E "ddagrab|gdigrab|dshow" ffbuild/config.log || true
-          grep -E "CONFIG_DDAGRAB|CONFIG_GDIGRAB|CONFIG_DSHOW" config.h || true
-
-          echo "==> Build FFmpeg"
+          echo "==> Build"
           make -j"$JOBS"
           make install
 
-          echo "==> Post-build sanity (devices, filters)"
-          "${DIST}/bin/ffmpeg" -hide_banner -devices
-          "${DIST}/bin/ffmpeg" -hide_banner -filters | grep -i '^.*scale' || true
-
-          echo "==> Contents of dist/bin"
-          ls -la "$DIST/bin"
+          echo "==> Post-build sanity"
+          "$DIST/bin/ffmpeg" -hide_banner -devices
+          "$DIST/bin/ffmpeg" -hide_banner -filters | grep scale || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-scale-ddagrab
+          name: ffmpeg-windows-ddagrab-scale
           path: dist/bin/**
