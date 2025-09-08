@@ -1,10 +1,14 @@
-name: Build Minimal FFmpeg Windows (ddagrab + scale)
+name: Build Minimal FFmpeg Windows (ddagrab + scale, portable)
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+
+env:
+  # Use a tag that has ddagrab. You can change to n7.0 if you like, but master is safest.
+  FFMPEG_TAG: master
 
 jobs:
   build-windows:
@@ -21,8 +25,9 @@ jobs:
           install: >
             base-devel git make pkg-config nasm
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-ntldd
 
-      - name: Build x264 and FFmpeg
+      - name: Build x264 and FFmpeg (ddagrab enabled)
         shell: msys2 {0}
         run: |
           set -eo pipefail
@@ -33,7 +38,7 @@ jobs:
           mkdir -p "$BUILD" "$DIST"
           cd "$BUILD"
 
-          echo "==> Build x264"
+          echo "==> Build x264 (static, no cli/opencl)"
           if [ ! -d x264 ]; then
             git clone --depth 1 https://code.videolan.org/videolan/x264.git
           fi
@@ -44,17 +49,16 @@ jobs:
           export PKG_CONFIG_PATH="$PWD:${PKG_CONFIG_PATH:-}"
           cd ..
 
-          echo "==> Fetch FFmpeg"
-          : "${FFMPEG_TAG:=n7.0}"
+          echo "==> Fetch FFmpeg ($FFMPEG_TAG)"
           if [ ! -d FFmpeg ]; then
             git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
           fi
           cd FFmpeg
 
-          echo "==> Verify ddagrab is available"
-          ./configure --list-indevs | grep -i ddagrab || echo "WARNING: no ddagrab in this tag ($FFMPEG_TAG)"
+          echo "==> Check that this source has ddagrab"
+          ./configure --list-indevs | grep -i '\bddagrab\b' || { echo 'ERROR: this tag lacks ddagrab'; exit 2; }
 
-          echo "==> Configure FFmpeg"
+          echo "==> Configure FFmpeg (NO full-static flags; add DirectX libs for ddagrab)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
@@ -87,16 +91,30 @@ jobs:
             --enable-filter=scale \
             --extra-libs="-ld3d11 -ldxgi -lole32 -luuid -ldwmapi"
 
+          echo "==> Inspect configure for ddagrab/gdigrab/dshow"
+          grep -E "ddagrab|gdigrab|dshow" ffbuild/config.log || true
+          grep -E "CONFIG_DDAGRAB|CONFIG_GDIGRAB|CONFIG_DSHOW" config.h || true
+
           echo "==> Build"
           make -j"$JOBS"
           make install
 
+          echo "==> Bundle dependent DLLs to make artifact portable"
+          cd "$DIST/bin"
+          ntldd -R ffmpeg.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
+            cp -n "$dll" . || true
+          done
+          ntldd -R ffprobe.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
+            cp -n "$dll" . || true
+          done
+
           echo "==> Post-build sanity"
-          "$DIST/bin/ffmpeg" -hide_banner -devices
-          "$DIST/bin/ffmpeg" -hide_banner -filters | grep scale || true
+          ./ffmpeg.exe -hide_banner -devices
+          ./ffmpeg.exe -hide_banner -filters | grep -i '^.*scale' || true
+          ls -la
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-ddagrab-scale
+          name: ffmpeg-windows-ddagrab-scale-portable
           path: dist/bin/**
