@@ -32,7 +32,6 @@ jobs:
             yasm
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-dxheaders
             zip
 
       - name: Build x264 and FFmpeg (static) + apply Windows patches first
@@ -84,11 +83,12 @@ jobs:
             --disable-bzlib \
             --disable-iconv \
             --disable-zlib \
-            --disable-lzma
+            --disable-lzma \
+            --extra-libs="-ld3d11 -ldxgi -lole32 -luuid"
           make -j"$(nproc)"
           ./ffmpeg -version || true
 
-          # ---- Package (zip the binary) ----
+          # ---- Package (zip just the binary) ----
           mkdir -p ../../artifacts/windows
           exe="ffmpeg.exe"
           if [ ! -f "$exe" ]; then exe="ffmpeg_g.exe"; fi
@@ -123,6 +123,7 @@ jobs:
           git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
           git clone --depth=1 https://code.videolan.org/videolan/x264.git
 
+          # ---- Apply patches (common then mac) ----
           cd ffmpeg
           if [ -d ../../ffmpeg_patches/common ]; then
             shopt -s nullglob
@@ -134,12 +135,14 @@ jobs:
           fi
           cd ..
 
+          # ---- Build x264 (static) ----
           cd x264
           ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
           make -j"$(sysctl -n hw.logicalcpu)"
           make install
           export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
 
+          # ---- Build FFmpeg (static) ----
           cd ../ffmpeg
           ./configure \
             --enable-static \
@@ -156,13 +159,18 @@ jobs:
             --extra-ldflags="-framework CoreAudio"
           make -j"$(sysctl -n hw.logicalcpu)"
           ./ffmpeg -version
+
+          # ---- Package (tar just the binary) ----
+          mkdir -p ../../artifacts/macos
+          cp -f ./ffmpeg ../../artifacts/macos/ffmpeg
+          cd ../../artifacts/macos
           tar -czf ffmpeg-macos-static.tgz ffmpeg
 
       - name: Upload artifact (macOS)
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-macos-static
-          path: ffmpeg/ffmpeg/ffmpeg-macos-static.tgz
+          path: artifacts/macos/ffmpeg-macos-static.tgz
 
   linux:
     name: Linux (Ubuntu) build (depends on Windows)
@@ -187,6 +195,7 @@ jobs:
           git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
           git clone --depth=1 https://code.videolan.org/videolan/x264.git
 
+          # ---- Optional common patches ----
           cd ffmpeg
           if [ -d ../../ffmpeg_patches/common ]; then
             shopt -s nullglob
@@ -194,12 +203,14 @@ jobs:
           fi
           cd ..
 
+          # ---- Build x264 (static) ----
           cd x264
           ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
           make -j"$(nproc)"
           make install
           export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
 
+          # ---- Build FFmpeg (static) ----
           cd ../ffmpeg
           ./configure \
             --enable-static \
@@ -215,10 +226,15 @@ jobs:
             --disable-lzma
           make -j"$(nproc)"
           ./ffmpeg -version
+
+          # ---- Package (tar just the binary) ----
+          mkdir -p ../../artifacts/linux
+          cp -f ./ffmpeg ../../artifacts/linux/ffmpeg
+          cd ../../artifacts/linux
           tar -czf ffmpeg-linux-static.tgz ffmpeg
 
       - name: Upload artifact (Linux)
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-linux-static
-          path: ffmpeg/ffmpeg/ffmpeg-linux-static.tgz
+          path: artifacts/linux/ffmpeg-linux-static.tgz
