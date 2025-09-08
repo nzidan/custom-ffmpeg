@@ -1,19 +1,11 @@
-name: Build FFmpeg Lean (Windows x64)
+name: Build FFmpeg Basic (Windows x64)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
-    paths:
-      - '.github/workflows/ffmpeg-lean.yml'
 
 jobs:
   build:
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [cpu-baseline, modern-v3]
 
     steps:
       - name: Checkout
@@ -31,71 +23,13 @@ jobs:
             nasm
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-pkg-config
-            mingw-w64-x86_64-python
 
-      # ---------- Build x264 (static, installed to /mingw64) ----------
-      - name: Fetch x264
-        shell: msys2 {0}
-        run: |
-          set -euo pipefail
-          git clone --depth 1 https://code.videolan.org/videolan/x264.git x264
-
-      - name: Build x264 (static)
-        shell: msys2 {0}
-        env:
-          CC: gcc
-          AR: ar
-          RANLIB: ranlib
-          STRIP: strip
-        run: |
-          set -euo pipefail
-          cd x264
-          ./configure \
-            --host=x86_64-w64-mingw32 \
-            --prefix=/mingw64 \
-            --enable-static \
-            --disable-cli
-          make -j"$(nproc)"
-          make install
-          "$STRIP" /mingw64/lib/libx264.a || true
-          echo "=== /mingw64/lib/pkgconfig ==="
-          ls -l /mingw64/lib/pkgconfig || true
-
-      # ---------- Fetch FFmpeg ----------
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
-          set -euo pipefail
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
 
-      # ---------- Toolchain & x264 sanity checks ----------
-      - name: Toolchain & x264 diagnostics
-        shell: msys2 {0}
-        env:
-          PKG_CONFIG: /mingw64/bin/pkg-config
-          PKG_CONFIG_PATH: /mingw64/lib/pkgconfig:/usr/lib/pkgconfig
-        run: |
-          set -euo pipefail
-          echo "=== PATH ==="
-          echo "$PATH"
-          echo "=== gcc ==="
-          which gcc; gcc -v || true
-          echo "=== pkg-config ==="
-          which "$PKG_CONFIG"; "$PKG_CONFIG" --version
-          echo "=== x264 via pkg-config ==="
-          "$PKG_CONFIG" --modversion x264
-          "$PKG_CONFIG" --cflags --libs --static x264
-          echo "=== compile/link a tiny x264 test ==="
-          cat > /tmp/x264_test.c <<'EOF'
-          #include <x264.h>
-          int main(void){ x264_param_t p; x264_param_default(&p); return 0; }
-          EOF
-          gcc -o /tmp/x264_test.exe /tmp/x264_test.c $("$PKG_CONFIG" --cflags --libs --static x264)
-          /tmp/x264_test.exe || true
-          echo "x264 test built and (optionally) ran."
-
-      # ---------- Configure FFmpeg (lean + optimized) ----------
-      - name: Configure FFmpeg (lean + optimized, safe continuation)
+      - name: Configure FFmpeg (basic with ddagrab)
         shell: msys2 {0}
         env:
           CC: gcc
@@ -103,121 +37,60 @@ jobs:
           AR: ar
           RANLIB: ranlib
           LD: gcc
-          PKG_CONFIG: /mingw64/bin/pkg-config
-          PKG_CONFIG_PATH: /mingw64/lib/pkgconfig:/usr/lib/pkgconfig
         run: |
           set -euo pipefail
-          git config --global core.autocrlf false
           cd ffmpeg
 
-          # CPU tuning per matrix target
-          if [ "${{ matrix.target }}" = "modern-v3" ]; then
-            MARCH="-march=x86-64-v3"
-          else
-            MARCH="-march=x86-64"
-          fi
-
-          OPTS="-O3 -pipe ${MARCH} -fdata-sections -ffunction-sections -fvisibility=hidden -flto"
+          OPTS="-O3 -pipe -march=x86-64 -fdata-sections -ffunction-sections -fvisibility=hidden -flto"
           LDFLAGS="-Wl,--gc-sections -flto"
 
-          CFG_OPTS=(
-            --target-os=mingw32
-            --arch=x86_64
-            --enable-cross-compile
-            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --ld="$LD"
-            --pkg-config="$PKG_CONFIG"
-            --pkg-config-flags="--static"
-            --optflags="$OPTS"
-            --extra-cflags="$OPTS"
-            --extra-cxxflags="$OPTS"
-            --extra-ldflags="$LDFLAGS"
-            --disable-debug
-            --enable-optimizations
-            --disable-doc
-            --disable-programs --enable-ffmpeg
-            --disable-network
-            --disable-autodetect
-            --disable-everything
-            --enable-w32threads
-            --enable-dxva2 --enable-d3d11va
-
-            # Inputs (Windows capture)
-            --enable-indev=ddagrab
-            --enable-indev=gdigrab
-            --enable-indev=dshow
-            --enable-indev=lavfi
-
+          ./configure \
+            --target-os=mingw32 \
+            --arch=x86_64 \
+            --enable-cross-compile \
+            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --ld="$LD" \
+            --optflags="$OPTS" \
+            --extra-cflags="$OPTS" \
+            --extra-cxxflags="$OPTS" \
+            --extra-ldflags="$LDFLAGS" \
+            --disable-debug \
+            --enable-optimizations \
+            --disable-doc \
+            --disable-programs --enable-ffmpeg \
+            --disable-network \
+            --disable-autodetect \
+            --disable-everything \
+            --enable-w32threads \
+            --enable-dxva2 --enable-d3d11va \
+            \
+            # Inputs (screen/audio capture on Windows)
+            --enable-indev=ddagrab \
+            --enable-indev=gdigrab \
+            --enable-indev=dshow \
+            \
             # Protocols
-            --enable-protocol=file,pipe
-
-            # Muxers / Demuxers
-            --enable-muxer=mp4,matroska,mov,flv,segment,null
-            --enable-demuxer=lavfi
-
-            # Filters (minimal but useful)
-            --enable-filter=anull
-            --enable-filter=aresample
-            --enable-filter=asetpts
-            --enable-filter=fps
-            --enable-filter=format
-            --enable-filter=hwupload
-            --enable-filter=setpts
-            --enable-filter=scale
-
-            # Codecs
-            --enable-gpl
-            --enable-libx264
-            --enable-encoder=libx264,aac,pcm_s16le
-            --enable-decoder=rawvideo,aac,pcm_s16le
-            --enable-bsf=h264_mp4toannexb
-            --enable-parsers
-
-            # HW accel (playback/filter support)
-            --enable-hwaccel=h264_d3d11va
-            --enable-hwaccel=hevc_d3d11va
-          )
-
-          printf 'Running ./configure (%s) with %d options\n' "${{ matrix.target }}" "${#CFG_OPTS[@]}"
-          # If configure fails, dump config.log for visibility
-          ./configure "${CFG_OPTS[@]}" || { echo "=== ffbuild/config.log ==="; cat ffbuild/config.log; exit 1; }
+            --enable-protocol=file,pipe \
+            \
+            # Muxers
+            --enable-muxer=mp4,matroska,flv,null \
+            \
+            # Encoders/Decoders
+            --enable-encoder=mjpeg,pcm_s16le \
+            --enable-decoder=rawvideo,pcm_s16le
 
       - name: Build & Install FFmpeg
         shell: msys2 {0}
         run: |
-          set -euo pipefail
           cd ffmpeg
           make -j"$(nproc)"
           make install
           strip /mingw64/bin/ffmpeg.exe || true
           strip /mingw64/bin/ffprobe.exe || true
 
-      - name: Package artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-          OUT="ffmpeg-lean-${{ matrix.target }}-windows-x64"
-          mkdir -p "dist/$OUT/bin" "dist/$OUT/licenses"
-          cp "C:/msys64/mingw64/bin/ffmpeg.exe" "dist/$OUT/bin/"
-          cp "C:/msys64/mingw64/bin/ffprobe.exe" "dist/$OUT/bin/" || true
-          cat > "dist/$OUT/licenses/README.txt" <<'EOF'
-          FFmpeg is licensed under LGPL/GPL; x264 is GPL. Distribute binaries in compliance with their licenses.
-          This build enables: ddagrab, gdigrab, dshow, minimal filters/muxers, libx264.
-          EOF
-
-      # Always upload logs (even if previous steps failed)
-      - name: Upload config logs
-        if: always()
+      - name: Package artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-config-logs-${{ matrix.target }}
+          name: ffmpeg-basic-windows-x64
           path: |
-            ffmpeg/ffbuild/config.log
-            ffmpeg/config.h
-            ffmpeg/config.mak
-          if-no-files-found: ignore
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-lean-${{ matrix.target }}-windows-x64
-          path: dist/ffmpeg-lean-${{ matrix.target }}-windows-x64
+            C:/msys64/mingw64/bin/ffmpeg.exe
+            C:/msys64/mingw64/bin/ffprobe.exe
