@@ -18,6 +18,8 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           update: true
+          msystem: MINGW64
+          path-type: minimal
           install: >-
             base-devel
             git
@@ -27,20 +29,16 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-ffnvcodec-headers   # NVENC headers (optional but small)
-            mingw-w64-x86_64-amf                  # AMD AMF headers (optional but small)
-            mingw-w64-x86_64-x264                 # Software H.264 fallback (small & fast)
-          msystem: MINGW64
-          path-type: minimal
+            mingw-w64-x86_64-x264
 
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
-          git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
-          cd ffmpeg
-          git rev-parse --short HEAD > ../FFMPEG_GIT.txt
+            git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+            cd ffmpeg
+            git rev-parse --short HEAD > ../FFMPEG_GIT.txt
 
-      - name: Configure (aggressively optimized, minimal features)
+      - name: Configure (optimized, minimal recording feature set)
         shell: msys2 {0}
         working-directory: ffmpeg
         run: |
@@ -49,7 +47,7 @@ jobs:
           export AR=x86_64-w64-mingw32-ar
           export STRIP=x86_64-w64-mingw32-strip
 
-          # High optimization flags (safe on GitHub runners)
+          # High optimizations for modern GitHub hosted runners
           export CFLAGS="-O3 -pipe -DNDEBUG -fno-math-errno -fno-trapping-math -fomit-frame-pointer -march=x86-64-v3"
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-Wl,--as-needed"
@@ -63,38 +61,22 @@ jobs:
             --enable-ffmpeg \
             --disable-everything \
             \
-            # Core libs required by minimal pipeline
-            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample --enable-swscale --enable-avdevice \
+            --enable-avutil --enable-avcodec --enable-avformat --enable-avdevice \
+            --enable-swresample --enable-swscale \
             \
-            # Input devices: desktop + audio
             --enable-indev=ddagrab \
             --enable-indev=wasapi \
             \
-            # Encoders: prefer HW if present, + tiny SW fallback
-            --enable-encoder=h264_nvenc \
-            --enable-encoder=hevc_nvenc \
-            --enable-encoder=h264_amf \
-            --enable-encoder=hevc_amf \
-            --enable-libx264 --enable-gpl --enable-encoder=libx264 \
+            --enable-gpl --enable-libx264 --enable-encoder=libx264 \
             --enable-encoder=aac \
             \
-            # Muxers (recording targets)
             --enable-muxer=matroska \
             --enable-muxer=mp4 \
             --enable-muxer=mov \
-            --enable-muxer=flv \
             \
-            # Demuxers minimal (rarely used here, but harmless)
-            --enable-demuxer=lavfi \
-            \
-            # Protocols
             --enable-protocol=file \
             --enable-protocol=pipe \
-            --enable-protocol=tcp \
-            --enable-protocol=udp \
-            --enable-protocol=rtp \
             \
-            # Filters (keep only what’s commonly needed for recording)
             --enable-filter=null \
             --enable-filter=anull \
             --enable-filter=fps \
@@ -112,7 +94,6 @@ jobs:
           make -j"$(nproc)"
           mkdir -p ../artifact/bin
           cp -v ffmpeg.exe ../artifact/bin/
-          # Strip to reduce size
           x86_64-w64-mingw32-strip ../artifact/bin/ffmpeg.exe
 
       - name: Package
