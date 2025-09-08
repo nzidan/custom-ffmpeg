@@ -8,7 +8,7 @@ on:
 
 jobs:
   windows:
-    name: Windows (MSYS2 MinGW64) build (patched first)
+    name: Windows (MSYS2 MinGW64) build (patched first, fully static)
     runs-on: windows-latest
     defaults:
       run:
@@ -61,16 +61,19 @@ jobs:
           apply_patches_dir ../../ffmpeg_patches/common
           cd ..
 
-          # ---- Build x264 (static) ----
+          # ---- Build x264 (static only) ----
           cd x264
-          ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
+          ./configure --enable-static --disable-shared --disable-cli --disable-opencl --prefix=$PWD
           make -j"$(nproc)"
           make install
           export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
 
-          # ---- Build FFmpeg (static + Windows features) ----
+          # ---- Build FFmpeg (static + requested Windows features) ----
           cd ../ffmpeg
+          export PKG_CONFIG="pkg-config --static"
           ./configure \
+            --pkg-config-flags="--static" \
+            --disable-shared \
             --enable-static \
             --enable-gpl \
             --enable-libx264 \
@@ -84,9 +87,13 @@ jobs:
             --disable-iconv \
             --disable-zlib \
             --disable-lzma \
-            --extra-libs="-ld3d11 -ldxgi -lole32 -luuid"
+            --extra-cflags="-static -static-libgcc -static-libstdc++" \
+            --extra-ldflags="-static -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic -ld3d11 -ldxgi -lole32 -luuid"
           make -j"$(nproc)"
           ./ffmpeg -version || true
+
+          # (Optional) show imports to verify no libwinpthread-1.dll
+          objdump -p ./ffmpeg | grep -i "DLL Name" || true
 
           # ---- Package (zip just the binary) ----
           mkdir -p ../../artifacts/windows
@@ -231,10 +238,4 @@ jobs:
           mkdir -p ../../artifacts/linux
           cp -f ./ffmpeg ../../artifacts/linux/ffmpeg
           cd ../../artifacts/linux
-          tar -czf ffmpeg-linux-static.tgz ffmpeg
-
-      - name: Upload artifact (Linux)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-linux-static
-          path: artifacts/linux/ffmpeg-linux-static.tgz
+          tar -czf ffmpeg-linux-static.tgz ffmpe
