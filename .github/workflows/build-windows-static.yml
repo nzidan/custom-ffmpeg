@@ -1,4 +1,4 @@
-name: Build Minimal FFmpeg Windows (ddagrab + scale, portable)
+name: Build Minimal FFmpeg Windows (ddagrab + scale, auto-fallback)
 
 on:
   push:
@@ -6,9 +6,9 @@ on:
       - main
   workflow_dispatch:
 
+# You can override this when dispatching the workflow.
 env:
-  # Use a tag that has ddagrab. You can change to n7.0 if you like, but master is safest.
-  FFMPEG_TAG: master
+  FFMPEG_TAG: n7.0   # if this lacks ddagrab, we auto-fallback to master
 
 jobs:
   build-windows:
@@ -27,7 +27,7 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-ntldd
 
-      - name: Build x264 and FFmpeg (ddagrab enabled)
+      - name: Build x264 and FFmpeg (ddagrab enabled, with fallback)
         shell: msys2 {0}
         run: |
           set -eo pipefail
@@ -55,10 +55,15 @@ jobs:
           fi
           cd FFmpeg
 
-          echo "==> Check that this source has ddagrab"
-          ./configure --list-indevs | grep -i '\bddagrab\b' || { echo 'ERROR: this tag lacks ddagrab'; exit 2; }
+          echo "==> Check if this tag has ddagrab; if not, fallback to master"
+          if ! ./configure --list-indevs | grep -iq '\bddagrab\b'; then
+            echo "No ddagrab in $FFMPEG_TAG; switching to master"
+            git fetch origin master --depth=1
+            git checkout -f FETCH_HEAD
+            ./configure --list-indevs | grep -i '\bddagrab\b'
+          fi
 
-          echo "==> Configure FFmpeg (NO full-static flags; add DirectX libs for ddagrab)"
+          echo "==> Configure FFmpeg (no full-static; add DirectX libs)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
@@ -90,10 +95,6 @@ jobs:
             --enable-muxer=mov \
             --enable-filter=scale \
             --extra-libs="-ld3d11 -ldxgi -lole32 -luuid -ldwmapi"
-
-          echo "==> Inspect configure for ddagrab/gdigrab/dshow"
-          grep -E "ddagrab|gdigrab|dshow" ffbuild/config.log || true
-          grep -E "CONFIG_DDAGRAB|CONFIG_GDIGRAB|CONFIG_DSHOW" config.h || true
 
           echo "==> Build"
           make -j"$JOBS"
