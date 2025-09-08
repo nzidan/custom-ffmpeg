@@ -15,7 +15,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up MSYS2 (MinGW-w64 clang)
+      - name: Set up MSYS2 (MINGW64 + GCC)
         uses: msys2/setup-msys2@v2
         with:
           update: true
@@ -25,11 +25,11 @@ jobs:
             git
             make
             nasm
-            mingw-w64-clang-x86_64-toolchain
-            mingw-w64-clang-x86_64-pkg-config
-            mingw-w64-clang-x86_64-python
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-python
 
-      # ---------- Build libx264 (static, minimal) ----------
+      # ---------- Build x264 (static, with ASM) ----------
       - name: Fetch x264
         shell: msys2 {0}
         run: |
@@ -37,50 +37,53 @@ jobs:
 
       - name: Build x264 (static)
         shell: msys2 {0}
+        env:
+          CC: gcc
+          AR: ar
+          RANLIB: ranlib
+          STRIP: strip
         run: |
           set -e
           cd x264
           ./configure \
             --host=x86_64-w64-mingw32 \
             --enable-static \
-            --disable-cli \
-            --disable-lavf \
-            --disable-swscale \
-            --disable-asm=no
+            --disable-cli
           make -j$(nproc)
           make install
+          ${STRIP} /mingw64/lib/libx264.a || true
 
-      # ---------- Build FFmpeg (lean, optimized) ----------
+      # ---------- Build FFmpeg (lean + ddagrab) ----------
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
 
-      - name: Configure FFmpeg (lean + ddagrab)
+      - name: Configure FFmpeg (lean + optimized)
         shell: msys2 {0}
         env:
-          CC: clang
-          CXX: clang++
-          AR: llvm-ar
-          RANLIB: llvm-ranlib
-          LD: clang
+          CC: gcc
+          CXX: g++
+          AR: ar
+          RANLIB: ranlib
+          LD: gcc
         run: |
           set -e
           cd ffmpeg
 
-          # Aggressive but broadly-compatible CPU tuning for modern x86_64:
-          OPTS="-O3 -march=x86-64-v3 -ffunction-sections -fdata-sections -fvisibility=hidden"
+          # High-performance opts (safe on modern CPUs). Use -march=x86-64 if you need broader compatibility.
+          OPTS="-O3 -pipe -march=x86-64-v3 -fdata-sections -ffunction-sections -fvisibility=hidden -flto"
+          LDFLAGS="-Wl,--gc-sections -flto"
 
           ./configure \
             --target-os=mingw32 \
             --arch=x86_64 \
             --enable-cross-compile \
-            --cc=clang --cxx=clang++ --ar=llvm-ar --ranlib=llvm-ranlib --ld=clang \
+            --cc=$CC --cxx=$CXX --ar=$AR --ranlib=$RANLIB --ld=$LD \
             --optflags="$OPTS" \
             --extra-cflags="$OPTS" \
             --extra-cxxflags="$OPTS" \
-            --extra-ldflags="-Wl,--gc-sections" \
-            --enable-lto \
+            --extra-ldflags="$LDFLAGS" \
             --disable-debug \
             --enable-optimizations \
             --disable-doc \
@@ -108,7 +111,6 @@ jobs:
             --enable-filter=anull \
             --enable-filter=aresample \
             --enable-filter=asetpts \
-            --enable-filter=copy \
             --enable-filter=fps \
             --enable-filter=format \
             --enable-filter=hwupload \
@@ -123,28 +125,27 @@ jobs:
             --enable-bsf=h264_mp4toannexb \
             --enable-parsers \
             \
-            # ---- HW accel list (for future-proofing playback/filters) ----
+            # ---- HW accel (playback/filter support) ----
             --enable-hwaccel=h264_d3d11va \
             --enable-hwaccel=hevc_d3d11va
 
-      - name: Build FFmpeg
+      - name: Build & Install FFmpeg
         shell: msys2 {0}
         run: |
           cd ffmpeg
           make -j$(nproc)
           make install
+          strip /mingw64/bin/ffmpeg.exe || true
+          strip /mingw64/bin/ffprobe.exe || true
 
       - name: Package artifacts
         shell: bash
         run: |
-          mkdir -p dist/bin
-          # Copy MinGW64 bin directory where ffmpeg.exe was installed
-          # MSYS2 installs to C:\msys64\mingw64\bin by default
+          set -e
+          mkdir -p dist/bin dist/licenses
           cp "C:/msys64/mingw64/bin/ffmpeg.exe" dist/bin/
           cp "C:/msys64/mingw64/bin/ffprobe.exe" dist/bin/ || true
-          # Minimal licenses
-          mkdir -p dist/licenses
-          echo "FFmpeg and x264 licenses" > dist/licenses/README.txt
+          echo "FFmpeg is licensed under LGPL/GPL; x264 under GPL. Comply with their terms." > dist/licenses/README.txt
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
