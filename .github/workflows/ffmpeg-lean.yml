@@ -27,16 +27,26 @@ jobs:
             patch
             zip
             mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-binutils
             mingw-w64-x86_64-nasm
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-x264
 
+      - name: Tool sanity check
+        shell: msys2 {0}
+        run: |
+          which gcc || true
+          which x86_64-w64-mingw32-gcc || true
+          which strip || true
+          which x86_64-w64-mingw32-strip || true
+          gcc --version | head -n1 || true
+
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
-            git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
-            cd ffmpeg
-            git rev-parse --short HEAD > ../FFMPEG_GIT.txt
+          git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+          cd ffmpeg
+          git rev-parse --short HEAD > ../FFMPEG_GIT.txt
 
       - name: Configure (optimized, minimal recording feature set)
         shell: msys2 {0}
@@ -47,7 +57,6 @@ jobs:
           export AR=x86_64-w64-mingw32-ar
           export STRIP=x86_64-w64-mingw32-strip
 
-          # High optimizations for modern GitHub hosted runners
           export CFLAGS="-O3 -pipe -DNDEBUG -fno-math-errno -fno-trapping-math -fomit-frame-pointer -march=x86-64-v3"
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-Wl,--as-needed"
@@ -94,7 +103,15 @@ jobs:
           make -j"$(nproc)"
           mkdir -p ../artifact/bin
           cp -v ffmpeg.exe ../artifact/bin/
-          x86_64-w64-mingw32-strip ../artifact/bin/ffmpeg.exe
+
+          # Strip if available; otherwise skip gracefully
+          if command -v x86_64-w64-mingw32-strip >/dev/null 2>&1; then
+            x86_64-w64-mingw32-strip ../artifact/bin/ffmpeg.exe
+          elif command -v strip >/dev/null 2>&1; then
+            strip ../artifact/bin/ffmpeg.exe
+          else
+            echo "strip not found; skipping symbol stripping."
+          fi
 
       - name: Package
         shell: bash
