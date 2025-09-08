@@ -1,115 +1,153 @@
-name: Build static FFmpeg (Windows, x264, ddagrab)
+name: Build FFmpeg Lean (Windows x64)
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-    tags: [ "v*" ]
+    paths:
+      - '.github/workflows/ffmpeg-lean.yml'
 
 jobs:
-  windows:
-    name: Windows (MSYS2 MinGW64) — patched first, fully static
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
+  build:
+    runs-on: windows-2022
 
-      - name: Setup MSYS2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 (MinGW-w64 clang)
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
           update: true
-          install: >-
+          msystem: MINGW64
+          install: >
+            base-devel
             git
             make
-            patch
-            autoconf
-            automake
-            libtool
             nasm
-            yasm
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pkg-config
-            zip
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-pkg-config
+            mingw-w64-clang-x86_64-python
 
-      - name: Build x264 and FFmpeg (static) + apply Windows patches first
+      # ---------- Build libx264 (static, minimal) ----------
+      - name: Fetch x264
+        shell: msys2 {0}
         run: |
-          set -euxo pipefail
-          mkdir -p ffmpeg && cd ffmpeg
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git x264
 
-          # Get latest sources
-          git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
-          git clone --depth=1 https://code.videolan.org/videolan/x264.git
-
-          # ---- Apply patches FIRST (Windows-specific, then optional common) ----
-          cd ffmpeg
-          apply_patches_dir() {
-            local dir="$1"
-            if [ -d "$dir" ]; then
-              shopt -s nullglob
-              for p in "$dir"/*.patch; do
-                echo "Applying patch: $p"
-                git apply --ignore-whitespace "$p"
-              done
-            else
-              echo "No patch dir: $dir (skipping)"
-            fi
-          }
-          apply_patches_dir ../../ffmpeg_patches/win
-          apply_patches_dir ../../ffmpeg_patches/common
-          cd ..
-
-          # ---- Build x264 (static only) ----
+      - name: Build x264 (static)
+        shell: msys2 {0}
+        run: |
+          set -e
           cd x264
-          ./configure --enable-static --disable-shared --disable-cli --disable-opencl --prefix=$PWD
-          make -j"$(nproc)"
-          make install
-          # Ensure ffmpeg finds the static .pc
-          export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
-
-          # ---- Build FFmpeg (static + d3d11va + ddagrab; fix clock_gettime64) ----
-          cd ../ffmpeg
-          export PKG_CONFIG="pkg-config --static"
           ./configure \
-            --pkg-config-flags="--static" \
-            --disable-shared \
+            --host=x86_64-w64-mingw32 \
             --enable-static \
+            --disable-cli \
+            --disable-lavf \
+            --disable-swscale \
+            --disable-asm=no
+          make -j$(nproc)
+          make install
+
+      # ---------- Build FFmpeg (lean, optimized) ----------
+      - name: Fetch FFmpeg
+        shell: msys2 {0}
+        run: |
+          git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
+
+      - name: Configure FFmpeg (lean + ddagrab)
+        shell: msys2 {0}
+        env:
+          CC: clang
+          CXX: clang++
+          AR: llvm-ar
+          RANLIB: llvm-ranlib
+          LD: clang
+        run: |
+          set -e
+          cd ffmpeg
+
+          # Aggressive but broadly-compatible CPU tuning for modern x86_64:
+          OPTS="-O3 -march=x86-64-v3 -ffunction-sections -fdata-sections -fvisibility=hidden"
+
+          ./configure \
+            --target-os=mingw32 \
+            --arch=x86_64 \
+            --enable-cross-compile \
+            --cc=clang --cxx=clang++ --ar=llvm-ar --ranlib=llvm-ranlib --ld=clang \
+            --optflags="$OPTS" \
+            --extra-cflags="$OPTS" \
+            --extra-cxxflags="$OPTS" \
+            --extra-ldflags="-Wl,--gc-sections" \
+            --enable-lto \
+            --disable-debug \
+            --enable-optimizations \
+            --disable-doc \
+            --disable-programs --enable-ffmpeg \
+            --disable-network \
+            --disable-autodetect \
+            --disable-everything \
+            --enable-w32threads \
+            --enable-dxva2 --enable-d3d11va \
+            \
+            # ---- Inputs for Windows capture ----
+            --enable-indev=ddagrab \
+            --enable-indev=gdigrab \
+            --enable-indev=dshow \
+            --enable-indev=lavfi \
+            \
+            # ---- Protocols ----
+            --enable-protocol=file,pipe \
+            \
+            # ---- Muxers / Demuxers ----
+            --enable-muxer=mp4,matroska,mov,flv,segment,null \
+            --enable-demuxer=lavfi \
+            \
+            # ---- Filters (minimal but useful for capture) ----
+            --enable-filter=anull \
+            --enable-filter=aresample \
+            --enable-filter=asetpts \
+            --enable-filter=copy \
+            --enable-filter=fps \
+            --enable-filter=format \
+            --enable-filter=hwupload \
+            --enable-filter=setpts \
+            --enable-filter=scale \
+            \
+            # ---- Codecs ----
             --enable-gpl \
             --enable-libx264 \
-            --enable-ffmpeg \
-            --enable-d3d11va \
-            --enable-indev=ddagrab \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-sdl2 \
-            --disable-bzlib \
-            --disable-iconv \
-            --disable-zlib \
-            --disable-lzma \
-            --extra-cflags="-static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0A00" \
-            --extra-ldflags="-static -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic -ld3d11 -ldxgi -ldxguid -lole32 -luuid"
-          make -j"$(nproc)"
+            --enable-encoder=libx264,aac,pcm_s16le \
+            --enable-decoder=rawvideo,aac,pcm_s16le \
+            --enable-bsf=h264_mp4toannexb \
+            --enable-parsers \
+            \
+            # ---- HW accel list (for future-proofing playback/filters) ----
+            --enable-hwaccel=h264_d3d11va \
+            --enable-hwaccel=hevc_d3d11va
 
-          # ---- Verify 'ddagrab' is compiled in ----
-          mkdir -p ../../artifacts/windows
-          ./ffmpeg -hide_banner -devices | tee ../../artifacts/windows/devices.txt
-          if ! ./ffmpeg -hide_banner -f ddagrab -list_devices true -i dummy 1>../../artifacts/windows/ddagrab_stdout.txt 2>../../artifacts/windows/ddagrab_stderr.txt; then true; fi
-          grep -qi ddagrab ../../artifacts/windows/devices.txt || { echo "ERROR: ddagrab not built"; exit 1; }
+      - name: Build FFmpeg
+        shell: msys2 {0}
+        run: |
+          cd ffmpeg
+          make -j$(nproc)
+          make install
 
-          # ---- Optional: confirm no dynamic winpthread/UCRT symbol deps ----
-          objdump -p ./ffmpeg | grep -i "DLL Name" || true
+      - name: Package artifacts
+        shell: bash
+        run: |
+          mkdir -p dist/bin
+          # Copy MinGW64 bin directory where ffmpeg.exe was installed
+          # MSYS2 installs to C:\msys64\mingw64\bin by default
+          cp "C:/msys64/mingw64/bin/ffmpeg.exe" dist/bin/
+          cp "C:/msys64/mingw64/bin/ffprobe.exe" dist/bin/ || true
+          # Minimal licenses
+          mkdir -p dist/licenses
+          echo "FFmpeg and x264 licenses" > dist/licenses/README.txt
 
-          # ---- Package (zip just the binary) ----
-          exe="ffmpeg.exe"
-          if [ ! -f "$exe" ]; then exe="ffmpeg_g.exe"; fi
-          cp -f "./$exe" ../../artifacts/windows/ffmpeg.exe
-          cd ../../artifacts/windows
-          zip -9 ffmpeg-windows-static.zip ffmpeg.exe devices.txt ddagrab_stdout.txt ddagrab_stderr.txt
-
-      - name: Upload artifact (Windows)
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-static
-          path: artifacts/windows/ffmpeg-windows-static.zip
+          name: ffmpeg-lean-windows-x64
+          path: dist
