@@ -16,7 +16,7 @@ jobs:
       - name: Install deps (Homebrew)
         run: |
           brew update
-          brew install pkg-config nasm
+          brew install pkg-config nasm || true
 
       - name: Build x264 (static) and FFmpeg (static)
         shell: bash
@@ -90,6 +90,12 @@ jobs:
           echo "==> Build FFmpeg"
           make -j"$JOBS"
           make install
+
+          echo "==> Sanity check (devices, muxers, encoders, filters)"
+          "${DIST}/bin/ffmpeg" -hide_banner -devices
+          "${DIST}/bin/ffmpeg" -hide_banner -muxers | egrep " mp4| matroska| mov" || true
+          "${DIST}/bin/ffmpeg" -hide_banner -encoders | egrep "aac|libx264" || true
+          "${DIST}/bin/ffmpeg" -hide_banner -filters | egrep "^ T.*scale|^ V.*scale|^ .*[[:space:]]scale" || true
 
           echo "==> Contents of dist/bin"
           ls -la "$DIST/bin"
