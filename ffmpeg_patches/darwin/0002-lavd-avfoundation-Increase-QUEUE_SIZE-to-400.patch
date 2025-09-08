@@ -1,0 +1,51 @@
+From da1be8d2d9e1d5e35221a24c0f197d116058689a Mon Sep 17 00:00:00 2001
+From: Kevin Mark <kmark937@gmail.com>
+Date: Sat, 27 Apr 2019 03:28:53 -0400
+Subject: [PATCH 2/2] lavd/avfoundation: Increase QUEUE_SIZE to 400
+
+By increasing the QUEUE_SIZE the chance of frames dropping out of
+the buffer is significantly reduced. It's been noted in trac #4513
+by nickcrabtree that the current size of 4 is too low for most
+(any?) applications. 400 is ultimately an arbitrary-but-tested
+number.
+
+I've noticed that even with QUEUE_SIZE set to 400 I can still run
+into a situation where it's not high enough as evidence by the log
+output. However this is always in instances where my system is
+consistently encoding at a rate slower than frames are being pulled
+from AVFoundation so the buffer overrun is inevitable unless the
+duration left to encode is short. So it's hard to put the blame on
+this code when the problem can be alleviated by changing a runtime
+configuration elsewhere.
+
+Given the above limitation it seems clear that increasing QUEUE_SIZE
+is not a magic fix but gives the encoder more wiggle room to
+temporarily lag behind frames pulled in from AVFoundation. If you do
+see "video queue is full, the oldest frame has been dropped" in your
+log then increasing QUEUE_SIZE further may work in some instances
+but fixing the underlying issue would require an increase in encoder
+speed or a frame-rate reduction on the AVFoundation end.
+
+One last note is that while I use the term encoder here (as that's
+likely to be the slowest part of your pipeline) I am really
+referring to anything downstream of AVFoundation's input.
+---
+ libavdevice/avfoundation.m | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libavdevice/avfoundation.m b/libavdevice/avfoundation.m
+index 395992ab71..7fac262b3c 100644
+--- a/libavdevice/avfoundation.m
++++ b/libavdevice/avfoundation.m
+@@ -38,7 +38,7 @@
+ #include "libavutil/imgutils.h"
+ #include "avdevice.h"
+ 
+-#define QUEUE_SIZE 4
++#define QUEUE_SIZE 400
+ 
+ static const int avf_time_base = 1000000;
+ 
+-- 
+2.21.0
+

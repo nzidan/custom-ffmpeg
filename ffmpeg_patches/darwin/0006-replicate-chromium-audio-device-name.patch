@@ -1,0 +1,29 @@
+diff --git a/libavdevice/avfoundation.m b/libavdevice/avfoundation.m
+index 4d03ad9526..1d04fa91e9 100644
+--- a/libavdevice/avfoundation.m
++++ b/libavdevice/avfoundation.m
+@@ -770,7 +770,7 @@ static int avf_read_header(AVFormatContext *s)
+         } else {
+         // looking for video inputs
+         for (AVCaptureDevice *device in devices) {
+-            if (avdevice_compat_is_same(ctx->video_filename, device) > 0) {
++            if (!strncmp(ctx->video_filename, [[device localizedName] UTF8String], strlen(ctx->video_filename))) {
+                 video_device = device;
+                 break;
+             }
+@@ -831,14 +831,7 @@ static int avf_read_header(AVFormatContext *s)
+         if (!strncmp(ctx->audio_filename, "default", 7)) {
+             audio_device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+         } else {
+-        NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
+-
+-        for (AVCaptureDevice *device in devices) {
+-            if (avdevice_compat_is_same(ctx->audio_filename, device) > 0) {
+-                audio_device = device;
+-                break;
+-            }
+-        }
++            audio_device = avdevice_compat_from_electron(ctx->audio_filename);
+         }
+ 
+         if (!audio_device) {

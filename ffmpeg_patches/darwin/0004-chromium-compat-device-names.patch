@@ -1,0 +1,44 @@
+diff --git a/libavdevice/Makefile b/libavdevice/Makefile
+index 6ea62b914e..1b64319264 100644
+--- a/libavdevice/Makefile
++++ b/libavdevice/Makefile
+@@ -15,7 +15,7 @@ OBJS-$(CONFIG_SHARED)                    += reverse.o
+ OBJS-$(CONFIG_ALSA_INDEV)                += alsa_dec.o alsa.o timefilter.o
+ OBJS-$(CONFIG_ALSA_OUTDEV)               += alsa_enc.o alsa.o
+ OBJS-$(CONFIG_ANDROID_CAMERA_INDEV)      += android_camera.o
+-OBJS-$(CONFIG_AVFOUNDATION_INDEV)        += avfoundation.o
++OBJS-$(CONFIG_AVFOUNDATION_INDEV)        += avfoundation.o avfoundation_compat.o
+ OBJS-$(CONFIG_BKTR_INDEV)                += bktr.o
+ OBJS-$(CONFIG_CACA_OUTDEV)               += caca.o
+ OBJS-$(CONFIG_DECKLINK_OUTDEV)           += decklink_enc.o decklink_enc_c.o decklink_common.o
+diff --git a/libavdevice/avfoundation.m b/libavdevice/avfoundation.m
+index 7fac262b3c..cd7d113695 100644
+--- a/libavdevice/avfoundation.m
++++ b/libavdevice/avfoundation.m
+@@ -38,6 +38,8 @@
+ #include "libavutil/imgutils.h"
+ #include "avdevice.h"
+ 
++#include "avfoundation_compat.h"
++
+ #define QUEUE_SIZE 400
+ 
+ static const int avf_time_base = 1000000;
+@@ -768,7 +770,7 @@ static int avf_read_header(AVFormatContext *s)
+         } else {
+         // looking for video inputs
+         for (AVCaptureDevice *device in devices) {
+-            if (!strncmp(ctx->video_filename, [[device localizedName] UTF8String], strlen(ctx->video_filename))) {
++            if (avdevice_compat_is_same(ctx->video_filename, device) > 0) {
+                 video_device = device;
+                 break;
+             }
+@@ -832,7 +834,7 @@ static int avf_read_header(AVFormatContext *s)
+         NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
+ 
+         for (AVCaptureDevice *device in devices) {
+-            if (!strncmp(ctx->audio_filename, [[device localizedName] UTF8String], strlen(ctx->audio_filename))) {
++            if (avdevice_compat_is_same(ctx->audio_filename, device) > 0) {
+                 audio_device = device;
+                 break;
+             }

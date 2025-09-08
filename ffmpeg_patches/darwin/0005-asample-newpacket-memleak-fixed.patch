@@ -1,0 +1,35 @@
+diff --git a/libavdevice/avfoundation.m b/libavdevice/avfoundation.m
+index fb55791aaf..4d03ad9526 100644
+--- a/libavdevice/avfoundation.m
++++ b/libavdevice/avfoundation.m
+@@ -960,12 +960,14 @@ static int avf_read_packet(AVFormatContext *s, AVPacket *pkt)
+             got_buffer |= 1;
+         }
+ 
+-        asample_buffer = (CMSampleBufferRef)[ctx->audio_queue lastObject];
+-        if (asample_buffer) {
+-            asample_buffer = (CMSampleBufferRef)CFRetain(asample_buffer);
+-            [ctx->audio_queue removeLastObject];
++        if (!vsample_buffer) {
++            asample_buffer = (CMSampleBufferRef)[ctx->audio_queue lastObject];
++            if (asample_buffer) {
++                asample_buffer = (CMSampleBufferRef)CFRetain(asample_buffer);
++                [ctx->audio_queue removeLastObject];
+ 
+-            got_buffer |= 1;
++                got_buffer |= 1;
++            }
+         }
+ 
+         if (!got_buffer || ([ctx->video_queue count] == 0 && [ctx->audio_queue count] == 0)) {
+@@ -1004,9 +1006,7 @@ static int avf_read_packet(AVFormatContext *s, AVPacket *pkt)
+             CVPixelBufferUnlockBaseAddress(image_buffer, 0);
+             CFRelease(vsample_buffer);
+             vsample_buffer = NULL;
+-        }
+-
+-        if (asample_buffer != nil) {
++        } else if (asample_buffer != nil) {
+             CMBlockBufferRef block_buffer = CMSampleBufferGetDataBuffer(asample_buffer);
+             int block_buffer_size         = CMBlockBufferGetDataLength(block_buffer);
+ 
