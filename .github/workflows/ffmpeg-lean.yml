@@ -1,111 +1,130 @@
-name: Build FFmpeg Basic (Windows x64)
+name: ffmpeg-min-rec (Windows ddagrab)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up MSYS2 (MINGW64 + GCC)
+      - name: Setup MSYS2 (MINGW64)
         uses: msys2/setup-msys2@v2
         with:
           update: true
-          msystem: MINGW64
-          install: >
+          install: >-
             base-devel
             git
-            make
-            nasm
+            tar
+            patch
+            zip
             mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-ffnvcodec-headers   # NVENC headers (optional but small)
+            mingw-w64-x86_64-amf                  # AMD AMF headers (optional but small)
+            mingw-w64-x86_64-x264                 # Software H.264 fallback (small & fast)
+          msystem: MINGW64
+          path-type: minimal
 
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
-          set -euo pipefail
-          git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
-
-      - name: Configure FFmpeg (basic with ddagrab; CRLF-safe)
-        shell: msys2 {0}
-        env:
-          CC: gcc
-          CXX: g++
-          AR: ar
-          RANLIB: ranlib
-          LD: gcc
-        run: |
-          set -euo pipefail
-          git config --global core.autocrlf false
+          git clone --depth=1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
           cd ffmpeg
+          git rev-parse --short HEAD > ../FFMPEG_GIT.txt
 
-          OPTS="-O3 -pipe -march=x86-64 -fdata-sections -ffunction-sections -fvisibility=hidden"
-          LDFLAGS="-Wl,--gc-sections"
+      - name: Configure (aggressively optimized, minimal features)
+        shell: msys2 {0}
+        working-directory: ffmpeg
+        run: |
+          export CC=x86_64-w64-mingw32-gcc
+          export CXX=x86_64-w64-mingw32-g++
+          export AR=x86_64-w64-mingw32-ar
+          export STRIP=x86_64-w64-mingw32-strip
 
-          CFG_OPTS=(
-            --target-os=mingw32
-            --arch=x86_64
-            --enable-cross-compile
-            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --ld="$LD"
-            --optflags="$OPTS"
-            --extra-cflags="$OPTS"
-            --extra-cxxflags="$OPTS"
-            --extra-ldflags="$LDFLAGS"
-            --disable-debug
-            --enable-optimizations
-            --disable-doc
-            --disable-programs --enable-ffmpeg
-            --disable-network
-            --disable-autodetect
-            --disable-everything
-            --enable-w32threads
-            --enable-dxva2 --enable-d3d11va
+          # High optimization flags (safe on GitHub runners)
+          export CFLAGS="-O3 -pipe -DNDEBUG -fno-math-errno -fno-trapping-math -fomit-frame-pointer -march=x86-64-v3"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-Wl,--as-needed"
 
-            # Inputs (Windows capture)
-            --enable-indev=ddagrab
-            --enable-indev=gdigrab
-            --enable-indev=dshow
-
+          ./configure \
+            --target-os=mingw32 \
+            --arch=x86_64 \
+            --enable-asm --enable-x86asm \
+            --enable-lto \
+            --disable-debug --disable-doc --disable-ffplay --disable-ffprobe \
+            --enable-ffmpeg \
+            --disable-everything \
+            \
+            # Core libs required by minimal pipeline
+            --enable-avcodec --enable-avformat --enable-avutil --enable-swresample --enable-swscale --enable-avdevice \
+            \
+            # Input devices: desktop + audio
+            --enable-indev=ddagrab \
+            --enable-indev=wasapi \
+            \
+            # Encoders: prefer HW if present, + tiny SW fallback
+            --enable-encoder=h264_nvenc \
+            --enable-encoder=hevc_nvenc \
+            --enable-encoder=h264_amf \
+            --enable-encoder=hevc_amf \
+            --enable-libx264 --enable-gpl --enable-encoder=libx264 \
+            --enable-encoder=aac \
+            \
+            # Muxers (recording targets)
+            --enable-muxer=matroska \
+            --enable-muxer=mp4 \
+            --enable-muxer=mov \
+            --enable-muxer=flv \
+            \
+            # Demuxers minimal (rarely used here, but harmless)
+            --enable-demuxer=lavfi \
+            \
             # Protocols
-            --enable-protocol=file,pipe
-
-            # Muxers (keep it simple)
-            --enable-muxer=mp4,matroska,null
-
-            # Encoders / Decoders (built-in only)
-            --enable-encoder=aac,mjpeg,pcm_s16le
-            --enable-decoder=rawvideo,aac,pcm_s16le
-
-            # Minimal filters you’ll likely need
-            --enable-filter=anull
-            --enable-filter=aresample
+            --enable-protocol=file \
+            --enable-protocol=pipe \
+            --enable-protocol=tcp \
+            --enable-protocol=udp \
+            --enable-protocol=rtp \
+            \
+            # Filters (keep only what’s commonly needed for recording)
+            --enable-filter=null \
+            --enable-filter=anull \
+            --enable-filter=fps \
+            --enable-filter=scale \
+            --enable-filter=format \
+            --enable-filter=aformat \
+            --enable-filter=aresample \
+            --enable-filter=setpts \
             --enable-filter=asetpts
-            --enable-filter=fps
-            --enable-filter=format
-            --enable-filter=setpts
-          )
 
-          echo "Running ./configure with ${#CFG_OPTS[@]} options"
-          ./configure "${CFG_OPTS[@]}"
-
-      - name: Build & Install FFmpeg
+      - name: Build
         shell: msys2 {0}
+        working-directory: ffmpeg
         run: |
-          set -euo pipefail
-          cd ffmpeg
           make -j"$(nproc)"
-          make install
-          strip /mingw64/bin/ffmpeg.exe || true
-          strip /mingw64/bin/ffprobe.exe || true
+          mkdir -p ../artifact/bin
+          cp -v ffmpeg.exe ../artifact/bin/
+          # Strip to reduce size
+          x86_64-w64-mingw32-strip ../artifact/bin/ffmpeg.exe
+
+      - name: Package
+        shell: bash
+        run: |
+          pushd artifact
+          FFREV=$(cat ../FFMPEG_GIT.txt)
+          zip -r "ffmpeg-min-rec_${FFREV}_win64.zip" .
+          popd
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-basic-windows-x64
-          path: |
-            C:/msys64/mingw64/bin/ffmpeg.exe
-            C:/msys64/mingw64/bin/ffprobe.exe
+          name: ffmpeg-min-rec_win64
+          path: artifact/*.zip
