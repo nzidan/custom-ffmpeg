@@ -1,4 +1,4 @@
-name: Build Minimal FFmpeg Windows (ddagrab + scale, portable)
+name: Build Minimal FFmpeg Windows (scale only, ddagrab enabled)
 
 on:
   push:
@@ -21,12 +21,11 @@ jobs:
           install: >
             base-devel git make pkg-config nasm
             mingw-w64-x86_64-toolchain
-            mingw-w64-x86_64-ntldd
 
-      - name: Build x264 and FFmpeg (ddagrab enabled)
+      - name: Build x264 (static) and FFmpeg
         shell: msys2 {0}
         run: |
-          set -euo pipefail
+          set -eo pipefail
           JOBS=$(nproc || echo 4)
           ROOT="$PWD"
           BUILD="$ROOT/_build"
@@ -34,10 +33,12 @@ jobs:
           mkdir -p "$BUILD" "$DIST"
           cd "$BUILD"
 
-          echo "==> Build x264 (static, no cli/opencl)"
+          echo "==> Fetching x264"
           if [ ! -d x264 ]; then
             git clone --depth 1 https://code.videolan.org/videolan/x264.git
           fi
+
+          echo "==> Building x264 (static, no cli/opencl)"
           cd x264
           ./configure --enable-static --disable-cli --disable-opencl --prefix="$PWD"
           make -j"$JOBS"
@@ -45,17 +46,14 @@ jobs:
           export PKG_CONFIG_PATH="$PWD:${PKG_CONFIG_PATH:-}"
           cd ..
 
-          echo "==> Fetch FFmpeg (master)"
+          echo "==> Fetching FFmpeg"
+          : "${FFMPEG_TAG:=n7.0}"
           if [ ! -d FFmpeg ]; then
-            git clone --depth 1 -b master https://github.com/FFmpeg/FFmpeg.git
+            git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
           fi
           cd FFmpeg
-          echo "FFmpeg commit: $(git rev-parse --short HEAD)"
 
-          echo "==> Show available input devices from this source (informational)"
-          ./configure --list-indevs || true
-
-          echo "==> Configure FFmpeg (no full-static; add DirectX libs for ddagrab)"
+          echo "==> Configure FFmpeg (scale-only, enable ddagrab/gdigrab/dshow)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
@@ -63,6 +61,8 @@ jobs:
             --target-os=mingw32 \
             --arch=x86_64 \
             --enable-static \
+            --disable-shared \
+            --disable-doc \
             --disable-ffplay \
             --disable-ffprobe \
             --disable-sdl2 \
@@ -70,40 +70,39 @@ jobs:
             --disable-iconv \
             --disable-zlib \
             --disable-lzma \
-
-            --enable-static --enable-gpl --enable-libx264
+            --disable-autodetect \
             --enable-gpl \
             --enable-libx264 \
             --enable-encoder=libx264 \
             --enable-encoder=aac \
             --enable-indev=dshow \
-            --enable-indev=gdigrab \
             --enable-indev=ddagrab \
+            --enable-indev=gdigrab \
             --enable-protocol=file \
             --enable-protocol=pipe \
+            --enable-muxer=mp4 \
+            --enable-muxer=matroska \
+            --enable-muxer=mov \
             --enable-filter=scale \
             --extra-libs="-ld3d11 -ldxgi -lole32 -luuid -ldwmapi"
 
-          echo "==> Build"
+          echo "==> Inspect configure results for ddagrab/gdigrab"
+          grep -E "ddagrab|gdigrab|dshow" ffbuild/config.log || true
+          grep -E "CONFIG_DDAGRAB|CONFIG_GDIGRAB|CONFIG_DSHOW" config.h || true
+
+          echo "==> Build FFmpeg"
           make -j"$JOBS"
           make install
 
-          echo "==> Bundle dependent DLLs (portable artifact)"
-          cd "$DIST/bin"
-          ntldd -R ffmpeg.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
-            cp -n "$dll" . || true
-          done
-          ntldd -R ffprobe.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
-            cp -n "$dll" . || true
-          done
+          echo "==> Post-build sanity (devices, filters)"
+          "${DIST}/bin/ffmpeg" -hide_banner -devices
+          "${DIST}/bin/ffmpeg" -hide_banner -filters | grep -i '^.*scale' || true
 
-          echo "==> Post-build sanity"
-          ./ffmpeg.exe -hide_banner -devices || true
-          ./ffmpeg.exe -hide_banner -filters | grep -i '^.*scale' || true
-          ls -la
+          echo "==> Contents of dist/bin"
+          ls -la "$DIST/bin"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-ddagrab-scale-portable
+          name: ffmpeg-windows-scale-ddagrab
           path: dist/bin/**
