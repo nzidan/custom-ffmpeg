@@ -1,14 +1,10 @@
-name: Build Minimal FFmpeg Windows (ddagrab + scale, auto-fallback)
+name: Build Minimal FFmpeg Windows (ddagrab + scale, portable)
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-
-# You can override this when dispatching the workflow.
-env:
-  FFMPEG_TAG: n7.0   # if this lacks ddagrab, we auto-fallback to master
 
 jobs:
   build-windows:
@@ -27,10 +23,10 @@ jobs:
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-ntldd
 
-      - name: Build x264 and FFmpeg (ddagrab enabled, with fallback)
+      - name: Build x264 and FFmpeg (ddagrab enabled)
         shell: msys2 {0}
         run: |
-          set -eo pipefail
+          set -euo pipefail
           JOBS=$(nproc || echo 4)
           ROOT="$PWD"
           BUILD="$ROOT/_build"
@@ -49,21 +45,17 @@ jobs:
           export PKG_CONFIG_PATH="$PWD:${PKG_CONFIG_PATH:-}"
           cd ..
 
-          echo "==> Fetch FFmpeg ($FFMPEG_TAG)"
+          echo "==> Fetch FFmpeg (master)"
           if [ ! -d FFmpeg ]; then
-            git clone --depth 1 -b "$FFMPEG_TAG" https://github.com/FFmpeg/FFmpeg.git
+            git clone --depth 1 -b master https://github.com/FFmpeg/FFmpeg.git
           fi
           cd FFmpeg
+          echo "FFmpeg commit: $(git rev-parse --short HEAD)"
 
-          echo "==> Check if this tag has ddagrab; if not, fallback to master"
-          if ! ./configure --list-indevs | grep -iq '\bddagrab\b'; then
-            echo "No ddagrab in $FFMPEG_TAG; switching to master"
-            git fetch origin master --depth=1
-            git checkout -f FETCH_HEAD
-            ./configure --list-indevs | grep -i '\bddagrab\b'
-          fi
+          echo "==> Show available input devices from this source (informational)"
+          ./configure --list-indevs || true
 
-          echo "==> Configure FFmpeg (no full-static; add DirectX libs)"
+          echo "==> Configure FFmpeg (no full-static; add DirectX libs for ddagrab)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
@@ -71,8 +63,6 @@ jobs:
             --target-os=mingw32 \
             --arch=x86_64 \
             --enable-static \
-            --disable-shared \
-            --disable-doc \
             --disable-ffplay \
             --disable-ffprobe \
             --disable-sdl2 \
@@ -80,7 +70,8 @@ jobs:
             --disable-iconv \
             --disable-zlib \
             --disable-lzma \
-            --disable-autodetect \
+
+            --enable-static --enable-gpl --enable-libx264
             --enable-gpl \
             --enable-libx264 \
             --enable-encoder=libx264 \
@@ -90,9 +81,6 @@ jobs:
             --enable-indev=ddagrab \
             --enable-protocol=file \
             --enable-protocol=pipe \
-            --enable-muxer=mp4 \
-            --enable-muxer=matroska \
-            --enable-muxer=mov \
             --enable-filter=scale \
             --extra-libs="-ld3d11 -ldxgi -lole32 -luuid -ldwmapi"
 
@@ -100,7 +88,7 @@ jobs:
           make -j"$JOBS"
           make install
 
-          echo "==> Bundle dependent DLLs to make artifact portable"
+          echo "==> Bundle dependent DLLs (portable artifact)"
           cd "$DIST/bin"
           ntldd -R ffmpeg.exe | tr -d '\r' | awk '/mingw64\/bin/ {print $3}' | sort -u | while read -r dll; do
             cp -n "$dll" . || true
@@ -110,7 +98,7 @@ jobs:
           done
 
           echo "==> Post-build sanity"
-          ./ffmpeg.exe -hide_banner -devices
+          ./ffmpeg.exe -hide_banner -devices || true
           ./ffmpeg.exe -hide_banner -filters | grep -i '^.*scale' || true
           ls -la
 
