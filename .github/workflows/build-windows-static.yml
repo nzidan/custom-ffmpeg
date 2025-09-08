@@ -7,20 +7,33 @@ on:
     tags: [ "v*" ]
 
 jobs:
-  linux:
-    name: Linux (Ubuntu) build
-    runs-on: ubuntu-22.04
+  windows:
+    name: Windows (MSYS2 MinGW64) build (patched first)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git build-essential pkg-config make \
-            yasm nasm autoconf automake libtool
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            make
+            patch
+            autoconf
+            automake
+            libtool
+            nasm
+            yasm
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkg-config
 
-      - name: Build x264 and FFmpeg (static)
+      - name: Build x264 and FFmpeg (static) + apply Windows patches first
         run: |
           set -euxo pipefail
           mkdir -p ffmpeg && cd ffmpeg
@@ -29,12 +42,29 @@ jobs:
           git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
           git clone --depth=1 https://code.videolan.org/videolan/x264.git
 
+          # ---- Apply patches FIRST (Windows-specific, then common) ----
+          cd ffmpeg
+          apply_patches_dir() {
+            local dir="$1"
+            if [ -d "$dir" ]; then
+              shopt -s nullglob
+              for p in "$dir"/*.patch; do
+                echo "Applying patch: $p"
+                git apply --ignore-whitespace "$p"
+              done
+            else
+              echo "No patch dir: $dir (skipping)"
+            fi
+          }
+          apply_patches_dir ../../ffmpeg_patches/win
+          apply_patches_dir ../../ffmpeg_patches/common
+          cd ..
+
           # ---- Build x264 (static) ----
           cd x264
           ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
           make -j"$(nproc)"
           make install
-          # Match your instructions; include lib/pkgconfig for reliability
           export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
 
           # ---- Build FFmpeg (static) ----
@@ -51,21 +81,21 @@ jobs:
             --disable-zlib \
             --disable-lzma
           make -j"$(nproc)"
-          ./ffmpeg -version
+          ./ffmpeg -version || true  # may not execute on Windows POSIX layer
 
           # Package
-          tar -czf ffmpeg-linux-static.tgz ffmpeg
-        shell: bash
+          zip -9r ffmpeg-windows-static.zip ffmpeg
 
-      - name: Upload artifact (Linux)
+      - name: Upload artifact (Windows)
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-linux-static
-          path: ffmpeg/ffmpeg/ffmpeg-linux-static.tgz
+          name: ffmpeg-windows-static
+          path: ffmpeg/ffmpeg/ffmpeg-windows-static.zip
 
   macos:
-    name: macOS build
+    name: macOS build (depends on Windows)
     runs-on: macos-latest
+    needs: [windows]
     steps:
       - uses: actions/checkout@v4
 
@@ -75,6 +105,7 @@ jobs:
           brew install yasm nasm pkg-config autoconf automake libtool
 
       - name: Build x264 and FFmpeg (static, with CoreAudio ldflag)
+        shell: bash
         run: |
           set -euxo pipefail
           mkdir -p ffmpeg && cd ffmpeg
@@ -82,6 +113,22 @@ jobs:
           # Sources (latest)
           git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
           git clone --depth=1 https://code.videolan.org/videolan/x264.git
+
+          # ---- Apply patches (common then mac) ----
+          cd ffmpeg
+          apply_patches_dir() {
+            local dir="$1"
+            if [ -d "$dir" ]; then
+              shopt -s nullglob
+              for p in "$dir"/*.patch; do
+                echo "Applying patch: $p"
+                git apply "$p"
+              done
+            fi
+          }
+          apply_patches_dir ../../ffmpeg_patches/common
+          apply_patches_dir ../../ffmpeg_patches/darwin
+          cd ..
 
           # ---- Build x264 (static) ----
           cd x264
@@ -109,7 +156,6 @@ jobs:
 
           # Package
           tar -czf ffmpeg-macos-static.tgz ffmpeg
-        shell: bash
 
       - name: Upload artifact (macOS)
         uses: actions/upload-artifact@v4
@@ -117,33 +163,21 @@ jobs:
           name: ffmpeg-macos-static
           path: ffmpeg/ffmpeg/ffmpeg-macos-static.tgz
 
-  windows:
-    name: Windows (MSYS2 MinGW64) build
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
+  linux:
+    name: Linux (Ubuntu) build (depends on Windows)
+    runs-on: ubuntu-22.04
+    needs: [windows]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            git
-            make
-            patch
-            autoconf
-            automake
-            libtool
-            nasm
-            yasm
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-pkg-config
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git build-essential pkg-config make \
+            yasm nasm autoconf automake libtool
 
-      - name: Build x264 and FFmpeg (static) + apply Windows patch
+      - name: Build x264 and FFmpeg (static)
         run: |
           set -euxo pipefail
           mkdir -p ffmpeg && cd ffmpeg
@@ -152,10 +186,14 @@ jobs:
           git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
           git clone --depth=1 https://code.videolan.org/videolan/x264.git
 
-          # Apply Windows patch (expects file in repo at ffmpeg_patches/win/...)
+          # ---- Optional: apply common patches on Linux ----
           cd ffmpeg
-          if [ -f ../../ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch ]; then
-            git apply ../../ffmpeg_patches/win/removed_captureblt_from_gdigrab.patch
+          if [ -d ../../ffmpeg_patches/common ]; then
+            shopt -s nullglob
+            for p in ../../ffmpeg_patches/common/*.patch; do
+              echo "Applying patch: $p"
+              git apply "$p"
+            done
           fi
           cd ..
 
@@ -180,13 +218,14 @@ jobs:
             --disable-zlib \
             --disable-lzma
           make -j"$(nproc)"
-          ./ffmpeg -version || true  # allow running test to fail on non-POSIX
+          ./ffmpeg -version
 
           # Package
-          zip -9r ffmpeg-windows-static.zip ffmpeg
+          tar -czf ffmpeg-linux-static.tgz ffmpeg
+        shell: bash
 
-      - name: Upload artifact (Windows)
+      - name: Upload artifact (Linux)
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-static
-          path: ffmpeg/ffmpeg/ffmpeg-windows-static.zip
+          name: ffmpeg-linux-static
+          path: ffmpeg/ffmpeg/ffmpeg-linux-static.tgz
