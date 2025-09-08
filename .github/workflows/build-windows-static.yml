@@ -1,4 +1,4 @@
-name: Build Minimal FFmpeg Windows (static, scale only, with ddagrab + diagnostics)
+name: Build Minimal FFmpeg Windows (scale only, ddagrab enabled)
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
             base-devel git make pkg-config nasm
             mingw-w64-x86_64-toolchain
 
-      - name: Build x264 (static) and FFmpeg (static)
+      - name: Build x264 (static) and FFmpeg
         shell: msys2 {0}
         run: |
           set -eo pipefail
@@ -53,16 +53,13 @@ jobs:
           fi
           cd FFmpeg
 
-          echo "==> Configure FFmpeg (static, scale-only, enable ddagrab/gdigrab/dshow)"
+          echo "==> Configure FFmpeg (scale-only, enable ddagrab/gdigrab/dshow)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
             --prefix="$DIST" \
             --target-os=mingw32 \
             --arch=x86_64 \
-            --pkg-config-flags="--static" \
-            --extra-cflags="-I/mingw64/include" \
-            --extra-ldflags="-static -static-libgcc -static-libstdc++" \
             --enable-static \
             --disable-shared \
             --disable-doc \
@@ -86,7 +83,8 @@ jobs:
             --enable-muxer=mp4 \
             --enable-muxer=matroska \
             --enable-muxer=mov \
-            --enable-filter=scale
+            --enable-filter=scale \
+            --extra-libs="-ld3d11 -ldxgi -lole32 -luuid -ldwmapi"
 
           echo "==> Inspect configure results for ddagrab/gdigrab"
           grep -E "ddagrab|gdigrab|dshow" ffbuild/config.log || true
@@ -106,5 +104,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-static-scale-ddagrab
+          name: ffmpeg-windows-scale-ddagrab
           path: dist/bin/**
