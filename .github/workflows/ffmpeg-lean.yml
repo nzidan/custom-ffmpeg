@@ -27,9 +27,10 @@ jobs:
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
+          set -euo pipefail
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
 
-      - name: Configure FFmpeg (basic with ddagrab)
+      - name: Configure FFmpeg (basic with ddagrab; CRLF-safe)
         shell: msys2 {0}
         env:
           CC: gcc
@@ -39,55 +40,69 @@ jobs:
           LD: gcc
         run: |
           set -euo pipefail
+          git config --global core.autocrlf false
           cd ffmpeg
 
-          OPTS="-O3 -pipe -march=x86-64 -fdata-sections -ffunction-sections -fvisibility=hidden -flto"
-          LDFLAGS="-Wl,--gc-sections -flto"
+          OPTS="-O3 -pipe -march=x86-64 -fdata-sections -ffunction-sections -fvisibility=hidden"
+          LDFLAGS="-Wl,--gc-sections"
 
-          ./configure \
-            --target-os=mingw32 \
-            --arch=x86_64 \
-            --enable-cross-compile \
-            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --ld="$LD" \
-            --optflags="$OPTS" \
-            --extra-cflags="$OPTS" \
-            --extra-cxxflags="$OPTS" \
-            --extra-ldflags="$LDFLAGS" \
-            --disable-debug \
-            --enable-optimizations \
-            --disable-doc \
-            --disable-programs --enable-ffmpeg \
-            --disable-network \
-            --disable-autodetect \
-            --disable-everything \
-            --enable-w32threads \
-            --enable-dxva2 --enable-d3d11va \
-            \
-            # Inputs (screen/audio capture on Windows)
-            --enable-indev=ddagrab \
-            --enable-indev=gdigrab \
-            --enable-indev=dshow \
-            \
+          CFG_OPTS=(
+            --target-os=mingw32
+            --arch=x86_64
+            --enable-cross-compile
+            --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --ld="$LD"
+            --optflags="$OPTS"
+            --extra-cflags="$OPTS"
+            --extra-cxxflags="$OPTS"
+            --extra-ldflags="$LDFLAGS"
+            --disable-debug
+            --enable-optimizations
+            --disable-doc
+            --disable-programs --enable-ffmpeg
+            --disable-network
+            --disable-autodetect
+            --disable-everything
+            --enable-w32threads
+            --enable-dxva2 --enable-d3d11va
+
+            # Inputs (Windows capture)
+            --enable-indev=ddagrab
+            --enable-indev=gdigrab
+            --enable-indev=dshow
+
             # Protocols
-            --enable-protocol=file,pipe \
-            \
-            # Muxers
-            --enable-muxer=mp4,matroska,flv,null \
-            \
-            # Encoders/Decoders
-            --enable-encoder=mjpeg,pcm_s16le \
-            --enable-decoder=rawvideo,pcm_s16le
+            --enable-protocol=file,pipe
+
+            # Muxers (keep it simple)
+            --enable-muxer=mp4,matroska,null
+
+            # Encoders / Decoders (built-in only)
+            --enable-encoder=aac,mjpeg,pcm_s16le
+            --enable-decoder=rawvideo,aac,pcm_s16le
+
+            # Minimal filters you’ll likely need
+            --enable-filter=anull
+            --enable-filter=aresample
+            --enable-filter=asetpts
+            --enable-filter=fps
+            --enable-filter=format
+            --enable-filter=setpts
+          )
+
+          echo "Running ./configure with ${#CFG_OPTS[@]} options"
+          ./configure "${CFG_OPTS[@]}"
 
       - name: Build & Install FFmpeg
         shell: msys2 {0}
         run: |
+          set -euo pipefail
           cd ffmpeg
           make -j"$(nproc)"
           make install
           strip /mingw64/bin/ffmpeg.exe || true
           strip /mingw64/bin/ffprobe.exe || true
 
-      - name: Package artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-basic-windows-x64
