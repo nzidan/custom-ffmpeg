@@ -1,4 +1,4 @@
-name: Build Minimal FFmpeg Windows (static, scale only)
+name: Build Minimal FFmpeg Windows (static, scale only, with ddagrab)
 
 on:
   push:
@@ -53,7 +53,7 @@ jobs:
           fi
           cd FFmpeg
 
-          echo "==> Configure FFmpeg (static, scale filter only)"
+          echo "==> Configure FFmpeg (static, scale filter only, with ddagrab)"
           PKG_CONFIG=/mingw64/bin/pkg-config \
           PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
           ./configure \
@@ -98,5 +98,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ffmpeg-windows-static-scale
+          name: ffmpeg-windows-static-scale-ddagrab
           path: dist/bin/**
