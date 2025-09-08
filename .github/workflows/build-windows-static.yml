@@ -1,4 +1,4 @@
-name: Build static FFmpeg (latest) with x264
+name: Build static FFmpeg (Windows, x264, ddagrab)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   windows:
-    name: Windows (MSYS2 MinGW64) build (patched first, fully static)
+    name: Windows (MSYS2 MinGW64) — patched first, fully static
     runs-on: windows-latest
     defaults:
       run:
@@ -39,11 +39,11 @@ jobs:
           set -euxo pipefail
           mkdir -p ffmpeg && cd ffmpeg
 
-          # Sources (latest)
+          # Get latest sources
           git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
           git clone --depth=1 https://code.videolan.org/videolan/x264.git
 
-          # ---- Apply patches FIRST (Windows-specific, then common) ----
+          # ---- Apply patches FIRST (Windows-specific, then optional common) ----
           cd ffmpeg
           apply_patches_dir() {
             local dir="$1"
@@ -66,9 +66,10 @@ jobs:
           ./configure --enable-static --disable-shared --disable-cli --disable-opencl --prefix=$PWD
           make -j"$(nproc)"
           make install
+          # Ensure ffmpeg finds the static .pc
           export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
 
-          # ---- Build FFmpeg (static + requested Windows features) ----
+          # ---- Build FFmpeg (static + d3d11va + ddagrab; fix clock_gettime64) ----
           cd ../ffmpeg
           export PKG_CONFIG="pkg-config --static"
           ./configure \
@@ -87,155 +88,28 @@ jobs:
             --disable-iconv \
             --disable-zlib \
             --disable-lzma \
-            --extra-cflags="-static -static-libgcc -static-libstdc++" \
-            --extra-ldflags="-static -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic -ld3d11 -ldxgi -lole32 -luuid"
+            --extra-cflags="-static -static-libgcc -static-libstdc++ -D_WIN32_WINNT=0x0A00" \
+            --extra-ldflags="-static -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic -ld3d11 -ldxgi -ldxguid -lole32 -luuid"
           make -j"$(nproc)"
-          ./ffmpeg -version || true
 
-          # (Optional) show imports to verify no libwinpthread-1.dll
+          # ---- Verify 'ddagrab' is compiled in ----
+          mkdir -p ../../artifacts/windows
+          ./ffmpeg -hide_banner -devices | tee ../../artifacts/windows/devices.txt
+          if ! ./ffmpeg -hide_banner -f ddagrab -list_devices true -i dummy 1>../../artifacts/windows/ddagrab_stdout.txt 2>../../artifacts/windows/ddagrab_stderr.txt; then true; fi
+          grep -qi ddagrab ../../artifacts/windows/devices.txt || { echo "ERROR: ddagrab not built"; exit 1; }
+
+          # ---- Optional: confirm no dynamic winpthread/UCRT symbol deps ----
           objdump -p ./ffmpeg | grep -i "DLL Name" || true
 
           # ---- Package (zip just the binary) ----
-          mkdir -p ../../artifacts/windows
           exe="ffmpeg.exe"
           if [ ! -f "$exe" ]; then exe="ffmpeg_g.exe"; fi
           cp -f "./$exe" ../../artifacts/windows/ffmpeg.exe
           cd ../../artifacts/windows
-          zip -9 ffmpeg-windows-static.zip ffmpeg.exe
+          zip -9 ffmpeg-windows-static.zip ffmpeg.exe devices.txt ddagrab_stdout.txt ddagrab_stderr.txt
 
       - name: Upload artifact (Windows)
         uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-windows-static
           path: artifacts/windows/ffmpeg-windows-static.zip
-
-  macos:
-    name: macOS build (depends on Windows)
-    runs-on: macos-latest
-    needs: [windows]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          brew update
-          brew install yasm nasm pkg-config autoconf automake libtool
-
-      - name: Build x264 and FFmpeg (static, patchable)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p ffmpeg && cd ffmpeg
-
-          git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
-          git clone --depth=1 https://code.videolan.org/videolan/x264.git
-
-          # ---- Apply patches (common then mac) ----
-          cd ffmpeg
-          if [ -d ../../ffmpeg_patches/common ]; then
-            shopt -s nullglob
-            for p in ../../ffmpeg_patches/common/*.patch; do git apply "$p"; done
-          fi
-          if [ -d ../../ffmpeg_patches/mac ]; then
-            shopt -s nullglob
-            for p in ../../ffmpeg_patches/mac/*.patch; do git apply "$p"; done
-          fi
-          cd ..
-
-          # ---- Build x264 (static) ----
-          cd x264
-          ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
-          make -j"$(sysctl -n hw.logicalcpu)"
-          make install
-          export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
-
-          # ---- Build FFmpeg (static) ----
-          cd ../ffmpeg
-          ./configure \
-            --enable-static \
-            --enable-gpl \
-            --enable-libx264 \
-            --enable-ffmpeg \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-sdl2 \
-            --disable-bzlib \
-            --disable-iconv \
-            --disable-zlib \
-            --disable-lzma \
-            --extra-ldflags="-framework CoreAudio"
-          make -j"$(sysctl -n hw.logicalcpu)"
-          ./ffmpeg -version
-
-          # ---- Package (tar just the binary) ----
-          mkdir -p ../../artifacts/macos
-          cp -f ./ffmpeg ../../artifacts/macos/ffmpeg
-          cd ../../artifacts/macos
-          tar -czf ffmpeg-macos-static.tgz ffmpeg
-
-      - name: Upload artifact (macOS)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ffmpeg-macos-static
-          path: artifacts/macos/ffmpeg-macos-static.tgz
-
-  linux:
-    name: Linux (Ubuntu) build (depends on Windows)
-    runs-on: ubuntu-22.04
-    needs: [windows]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git build-essential pkg-config make \
-            yasm nasm autoconf automake libtool
-
-      - name: Build x264 and FFmpeg (static)
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p ffmpeg && cd ffmpeg
-
-          git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
-          git clone --depth=1 https://code.videolan.org/videolan/x264.git
-
-          # ---- Optional common patches ----
-          cd ffmpeg
-          if [ -d ../../ffmpeg_patches/common ]; then
-            shopt -s nullglob
-            for p in ../../ffmpeg_patches/common/*.patch; do git apply "$p"; done
-          fi
-          cd ..
-
-          # ---- Build x264 (static) ----
-          cd x264
-          ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
-          make -j"$(nproc)"
-          make install
-          export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
-
-          # ---- Build FFmpeg (static) ----
-          cd ../ffmpeg
-          ./configure \
-            --enable-static \
-            --enable-gpl \
-            --enable-libx264 \
-            --enable-ffmpeg \
-            --disable-ffplay \
-            --disable-ffprobe \
-            --disable-sdl2 \
-            --disable-bzlib \
-            --disable-iconv \
-            --disable-zlib \
-            --disable-lzma
-          make -j"$(nproc)"
-          ./ffmpeg -version
-
-          # ---- Package (tar just the binary) ----
-          mkdir -p ../../artifacts/linux
-          cp -f ./ffmpeg ../../artifacts/linux/ffmpeg
-          cd ../../artifacts/linux
-          tar -czf ffmpeg-linux-static.tgz ffmpe
