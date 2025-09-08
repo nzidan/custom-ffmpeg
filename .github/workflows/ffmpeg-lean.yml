@@ -33,7 +33,7 @@ jobs:
             mingw-w64-x86_64-pkg-config
             mingw-w64-x86_64-python
 
-      # ---------- Build x264 (static) ----------
+      # ---------- Build x264 (static, installed to /mingw64) ----------
       - name: Fetch x264
         shell: msys2 {0}
         run: |
@@ -50,18 +50,37 @@ jobs:
         run: |
           set -euo pipefail
           cd x264
-          ./configure --host=x86_64-w64-mingw32 --enable-static --disable-cli
+          ./configure \
+            --host=x86_64-w64-mingw32 \
+            --prefix=/mingw64 \
+            --enable-static \
+            --disable-cli
           make -j"$(nproc)"
           make install
           "$STRIP" /mingw64/lib/libx264.a || true
+          echo "=== Installed x264 pc file ==="
+          ls -l /mingw64/lib/pkgconfig || true
 
-      # ---------- Build FFmpeg (lean + ddagrab) ----------
+      # ---------- Fetch FFmpeg ----------
       - name: Fetch FFmpeg
         shell: msys2 {0}
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
 
+      # ---------- Verify pkg-config can find x264 ----------
+      - name: Verify x264 via pkg-config
+        shell: msys2 {0}
+        env:
+          PKG_CONFIG: /mingw64/bin/pkg-config
+          PKG_CONFIG_PATH: /mingw64/lib/pkgconfig:/usr/lib/pkgconfig
+        run: |
+          set -euo pipefail
+          "$PKG_CONFIG" --version
+          "$PKG_CONFIG" --modversion x264
+          "$PKG_CONFIG" --cflags --libs --static x264
+
+      # ---------- Configure FFmpeg (lean + optimized) ----------
       - name: Configure FFmpeg (lean + optimized, safe continuation)
         shell: msys2 {0}
         env:
@@ -70,12 +89,14 @@ jobs:
           AR: ar
           RANLIB: ranlib
           LD: gcc
+          PKG_CONFIG: /mingw64/bin/pkg-config
+          PKG_CONFIG_PATH: /mingw64/lib/pkgconfig:/usr/lib/pkgconfig
         run: |
           set -euo pipefail
           git config --global core.autocrlf false
           cd ffmpeg
 
-          # Choose CPU tuning by matrix target
+          # CPU tuning per matrix target
           if [ "${{ matrix.target }}" = "modern-v3" ]; then
             MARCH="-march=x86-64-v3"
           else
@@ -90,6 +111,8 @@ jobs:
             --arch=x86_64
             --enable-cross-compile
             --cc="$CC" --cxx="$CXX" --ar="$AR" --ranlib="$RANLIB" --ld="$LD"
+            --pkg-config="$PKG_CONFIG"
+            --pkg-config-flags="--static"
             --optflags="$OPTS"
             --extra-cflags="$OPTS"
             --extra-cxxflags="$OPTS"
