@@ -58,7 +58,7 @@ jobs:
           make -j"$(nproc)"
           make install
           "$STRIP" /mingw64/lib/libx264.a || true
-          echo "=== Installed x264 pc file ==="
+          echo "=== /mingw64/lib/pkgconfig ==="
           ls -l /mingw64/lib/pkgconfig || true
 
       # ---------- Fetch FFmpeg ----------
@@ -68,17 +68,31 @@ jobs:
           set -euo pipefail
           git clone --depth 1 https://github.com/FFmpeg/FFmpeg.git ffmpeg
 
-      # ---------- Verify pkg-config can find x264 ----------
-      - name: Verify x264 via pkg-config
+      # ---------- Toolchain & x264 sanity checks ----------
+      - name: Toolchain & x264 diagnostics
         shell: msys2 {0}
         env:
           PKG_CONFIG: /mingw64/bin/pkg-config
           PKG_CONFIG_PATH: /mingw64/lib/pkgconfig:/usr/lib/pkgconfig
         run: |
           set -euo pipefail
-          "$PKG_CONFIG" --version
+          echo "=== PATH ==="
+          echo "$PATH"
+          echo "=== gcc ==="
+          which gcc; gcc -v || true
+          echo "=== pkg-config ==="
+          which "$PKG_CONFIG"; "$PKG_CONFIG" --version
+          echo "=== x264 via pkg-config ==="
           "$PKG_CONFIG" --modversion x264
           "$PKG_CONFIG" --cflags --libs --static x264
+          echo "=== compile/link a tiny x264 test ==="
+          cat > /tmp/x264_test.c <<'EOF'
+          #include <x264.h>
+          int main(void){ x264_param_t p; x264_param_default(&p); return 0; }
+          EOF
+          gcc -o /tmp/x264_test.exe /tmp/x264_test.c $("$PKG_CONFIG" --cflags --libs --static x264)
+          /tmp/x264_test.exe || true
+          echo "x264 test built and (optionally) ran."
 
       # ---------- Configure FFmpeg (lean + optimized) ----------
       - name: Configure FFmpeg (lean + optimized, safe continuation)
@@ -164,7 +178,8 @@ jobs:
           )
 
           printf 'Running ./configure (%s) with %d options\n' "${{ matrix.target }}" "${#CFG_OPTS[@]}"
-          ./configure "${CFG_OPTS[@]}"
+          # If configure fails, dump config.log for visibility
+          ./configure "${CFG_OPTS[@]}" || { echo "=== ffbuild/config.log ==="; cat ffbuild/config.log; exit 1; }
 
       - name: Build & Install FFmpeg
         shell: msys2 {0}
@@ -188,6 +203,18 @@ jobs:
           FFmpeg is licensed under LGPL/GPL; x264 is GPL. Distribute binaries in compliance with their licenses.
           This build enables: ddagrab, gdigrab, dshow, minimal filters/muxers, libx264.
           EOF
+
+      # Always upload logs (even if previous steps failed)
+      - name: Upload config logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-config-logs-${{ matrix.target }}
+          path: |
+            ffmpeg/ffbuild/config.log
+            ffmpeg/config.h
+            ffmpeg/config.mak
+          if-no-files-found: ignore
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
