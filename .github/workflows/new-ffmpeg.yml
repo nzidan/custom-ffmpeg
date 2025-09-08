@@ -1,0 +1,234 @@
+name: Build static FFmpeg (latest) with x264
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    tags: [ "v*" ]
+
+jobs:
+  windows:
+    name: Windows (MSYS2 MinGW64) build (patched first)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git
+            make
+            patch
+            autoconf
+            automake
+            libtool
+            nasm
+            yasm
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkg-config
+
+      - name: Build x264 and FFmpeg (static) + apply Windows patches first
+        run: |
+          set -euxo pipefail
+          mkdir -p ffmpeg && cd ffmpeg
+
+          # Sources (latest)
+          git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          git clone --depth=1 https://code.videolan.org/videolan/x264.git
+
+          # ---- Apply patches FIRST (Windows-specific, then common) ----
+          cd ffmpeg
+          apply_patches_dir() {
+            local dir="$1"
+            if [ -d "$dir" ]; then
+              shopt -s nullglob
+              for p in "$dir"/*.patch; do
+                echo "Applying patch: $p"
+                git apply --ignore-whitespace "$p"
+              done
+            else
+              echo "No patch dir: $dir (skipping)"
+            fi
+          }
+          apply_patches_dir ../../ffmpeg_patches/win
+          apply_patches_dir ../../ffmpeg_patches/common
+          cd ..
+
+          # ---- Build x264 (static) ----
+          cd x264
+          ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
+          make -j"$(nproc)"
+          make install
+          export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
+
+          # ---- Build FFmpeg (static) ----
+          cd ../ffmpeg
+          ./configure \
+            --enable-static \
+            --enable-gpl \
+            --enable-libx264 \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-sdl2 \
+            --disable-bzlib \
+            --disable-iconv \
+            --disable-zlib \
+            --disable-lzma
+          make -j"$(nproc)"
+          ./ffmpeg -version || true  # may not execute on Windows POSIX layer
+
+          # Package
+          zip -9r ffmpeg-windows-static.zip ffmpeg
+
+      - name: Upload artifact (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-windows-static
+          path: ffmpeg/ffmpeg/ffmpeg-windows-static.zip
+
+  macos:
+    name: macOS build (depends on Windows)
+    runs-on: macos-latest
+    needs: [windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew update
+          brew install yasm nasm pkg-config autoconf automake libtool
+
+      - name: Build x264 and FFmpeg (static, with CoreAudio ldflag)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p ffmpeg && cd ffmpeg
+
+          # Sources (latest)
+          git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          git clone --depth=1 https://code.videolan.org/videolan/x264.git
+
+          # ---- Apply patches (common then mac) ----
+          cd ffmpeg
+          apply_patches_dir() {
+            local dir="$1"
+            if [ -d "$dir" ]; then
+              shopt -s nullglob
+              for p in "$dir"/*.patch; do
+                echo "Applying patch: $p"
+                git apply "$p"
+              done
+            fi
+          }
+          apply_patches_dir ../../ffmpeg_patches/common
+          apply_patches_dir ../../ffmpeg_patches/darwin
+          cd ..
+
+          # ---- Build x264 (static) ----
+          cd x264
+          ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
+          make -j"$(sysctl -n hw.logicalcpu)"
+          make install
+          export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
+
+          # ---- Build FFmpeg (static) ----
+          cd ../ffmpeg
+          ./configure \
+            --enable-static \
+            --enable-gpl \
+            --enable-libx264 \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-sdl2 \
+            --disable-bzlib \
+            --disable-iconv \
+            --disable-zlib \
+            --disable-lzma \
+            --extra-ldflags="-framework CoreAudio"
+          make -j"$(sysctl -n hw.logicalcpu)"
+          ./ffmpeg -version
+
+          # Package
+          tar -czf ffmpeg-macos-static.tgz ffmpeg
+
+      - name: Upload artifact (macOS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-macos-static
+          path: ffmpeg/ffmpeg/ffmpeg-macos-static.tgz
+
+  linux:
+    name: Linux (Ubuntu) build (depends on Windows)
+    runs-on: ubuntu-22.04
+    needs: [windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git build-essential pkg-config make \
+            yasm nasm autoconf automake libtool
+
+      - name: Build x264 and FFmpeg (static)
+        run: |
+          set -euxo pipefail
+          mkdir -p ffmpeg && cd ffmpeg
+
+          # Sources (latest)
+          git clone --depth=1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
+          git clone --depth=1 https://code.videolan.org/videolan/x264.git
+
+          # ---- Optional: apply common patches on Linux ----
+          cd ffmpeg
+          if [ -d ../../ffmpeg_patches/common ]; then
+            shopt -s nullglob
+            for p in ../../ffmpeg_patches/common/*.patch; do
+              echo "Applying patch: $p"
+              git apply "$p"
+            done
+          fi
+          cd ..
+
+          # ---- Build x264 (static) ----
+          cd x264
+          ./configure --enable-static --disable-cli --disable-opencl --prefix=$PWD
+          make -j"$(nproc)"
+          make install
+          export PKG_CONFIG_PATH="$PWD:$PWD/lib/pkgconfig"
+
+          # ---- Build FFmpeg (static) ----
+          cd ../ffmpeg
+          ./configure \
+            --enable-static \
+            --enable-gpl \
+            --enable-d3d11va\
+            --enable-indev=ddagrab\
+            --enable-ffmpeg
+            --enable-libx264 \
+            --disable-ffplay \
+            --disable-ffprobe \
+            --disable-sdl2 \
+            --disable-bzlib \
+            --disable-iconv \
+            --disable-zlib \
+            --disable-lzma
+          make -j"$(nproc)"
+          ./ffmpeg -version
+
+          # Package
+          tar -czf ffmpeg-linux-static.tgz ffmpeg
+        shell: bash
+
+      - name: Upload artifact (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-linux-static
+          path: ffmpeg/ffmpeg/ffmpeg-linux-static.tgz
